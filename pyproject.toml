@@ -1,0 +1,18 @@
+[project]
+name = "worldview-study"
+version = "0.1.0"
+readme = "README.md"
+dependencies = [
+    "jupyter>=1.1.1",
+    "numpy>=2.2.2",
+    "pandas>=2.2.3",
+    "scikit-learn>=1.6.1",
+    "scipy>=1.15.1",
+    "openpyxl>=3.1.2",
+]
+
+[project.optional-dependencies]
+ci = [
+    "mypy>=1.14.1",
+    "ruff>=0.9.3",
+]
