@@ -1,4 +1,4 @@
-.PHONY: deps deps-all mypy ruff-check ruff-sort ruff-format
+.PHONY: deps deps-all mypy check sort format
 
 deps:
 	uv pip sync pyproject.toml
@@ -9,11 +9,11 @@ deps-all:
 mypy:
 	mypy .
 
-ruff-check:
+check:
 	ruff .
 
-ruff-format:
+format:
 	ruff format .
 
-ruff-sort:
+sort:
 	ruff check --select I --fix .
