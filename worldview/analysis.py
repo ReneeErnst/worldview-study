@@ -5,10 +5,13 @@ from statsmodels.formula.api import ols
 import statsmodels.api as sm
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.stats.weightstats import ttest_ind
-
+import numpy as np
+from scipy.stats import chi2_contingency
 import scipy.stats as stats
 import matplotlib.pyplot as plt
 import seaborn as sns
+from itertools import combinations
+from statsmodels.stats.multitest import multipletests
 
 
 def pearsons_correlation_matrix(df_corrs: pd.DataFrame) -> pd.DataFrame:
@@ -184,14 +187,6 @@ def one_way_anova(
     return anova_table, tukey_results
 
 
-def get_chi2(df: pd.DataFrame, x: str, y: str) -> tuple:
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        expected, observed, stats = pg.chi2_independence(data=df, x=x, y=y)
-
-    return stats[stats["test"] == "pearson"], expected, observed
-
-
 def get_independent_ttest(df: pd.DataFrame, x: str, y: str) -> pd.Series:
     """
     Performs an independent two-sample t-test between two groups using statsmodels.
@@ -271,3 +266,115 @@ def get_independent_ttest(df: pd.DataFrame, x: str, y: str) -> pd.Series:
             ],
         }
     )
+
+
+def run_chi2_analysis(
+    df: pd.DataFrame, x: str, y: str, alpha: float = 0.05, p_adjust_method: str = "bonferroni"
+) -> dict:
+    """
+    Performs a Chi-squared test of independence and, if significant,
+    conducts pairwise post-hoc tests with p-value correction using statsmodels.
+
+    This function returns a dictionary containing all values needed for a
+    complete APA-style write-up.
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing the data.
+        x (str): The column name for the independent variable (groups).
+        y (str): The column name for the dependent variable (categories).
+        alpha (float): The significance level. Defaults to 0.05.
+        p_adjust_method (str): The p-value adjustment method for post-hoc tests.
+                               See statsmodels.stats.multitest.multipletests
+                               documentation for options. Defaults to "bonferroni".
+
+    Returns:
+        dict: A dictionary containing the contingency table, main test results,
+              expected frequencies, post-hoc results (if applicable), and an
+              APA-formatted summary string.
+    """
+    # --- 1. Create Contingency Table ---
+    contingency_table = pd.crosstab(df[x], df[y])
+    
+    # --- 2. Perform the Main Chi-Squared Test ---
+    chi2, p_value, dof, expected_freqs = chi2_contingency(contingency_table)
+
+    # --- 3. Calculate Sample Size and Effect Size (Cramer's V) ---
+    sample_size = contingency_table.sum().sum()
+    min_dim = min(contingency_table.shape) - 1
+    # Avoid division by zero if min_dim is 0 (e.g., a 1xN table)
+    cramer_v = np.sqrt(chi2 / (sample_size * min_dim)) if min_dim > 0 else 0
+
+    # --- 4. Format the p-value for APA style ---
+    if p_value < 0.001:
+        p_apa = "< .001"
+    else:
+        p_apa = f"= {p_value:.3f}"
+
+    # --- 5. Create APA Summary String for the Main Test ---
+    apa_summary = (
+        f"χ²({dof}, N = {sample_size}) = {chi2:.2f}, "
+        f"p {p_apa}, Cramer's V = {cramer_v:.2f}"
+    )
+
+    # --- 6. Conditionally Perform Post-Hoc Tests ---
+    posthoc_results = None
+    if p_value < alpha:
+        print(f"Overall test was significant (p = {p_value:.4f}). Running post-hoc tests...")
+        
+        # Manually perform pairwise chi-squared tests
+        groups = contingency_table.index.tolist()
+        all_pairs = list(combinations(groups, 2))
+        p_values_uncorrected = []
+
+        for group1, group2 in all_pairs:
+            pair_table = contingency_table.loc[[group1, group2]]
+            
+            # Remove columns where both groups have a count of 0 to prevent ValueError
+            pair_table = pair_table.loc[:, pair_table.sum(axis=0) > 0]
+            
+            # If table is too small after filtering, test is not meaningful
+            if pair_table.shape[1] < 2:
+                p_uncorr = 1.0
+            else:
+                # Run chi2 test on the 2xN table for the pair
+                _, p_uncorr, _, _ = chi2_contingency(pair_table, correction=False)
+            
+            p_values_uncorrected.append(p_uncorr)
+
+        # Correct the p-values using statsmodels
+        reject, p_values_corrected, _, _ = multipletests(
+            p_values_uncorrected, alpha=alpha, method=p_adjust_method
+        )
+
+        # Create a clean matrix for the results
+        posthoc_df = pd.DataFrame(np.nan, index=groups, columns=groups)
+        for (group1, group2), p_corr in zip(all_pairs, p_values_corrected):
+            posthoc_df.loc[group1, group2] = p_corr
+            posthoc_df.loc[group2, group1] = p_corr
+        
+        np.fill_diagonal(posthoc_df.values, 1.0)
+        posthoc_results = posthoc_df
+
+    else:
+        print(f"Overall test was not significant (p = {p_value:.4f}). Skipping post-hoc tests.")
+        
+    # --- 7. Compile All Results into a Dictionary ---
+    results = {
+        "contingency_table": contingency_table,
+        "main_test": {
+            "chi2_statistic": chi2,
+            "dof": dof,
+            "p_value": p_value,
+            "sample_size": sample_size,
+            "cramer_v_effect_size": cramer_v,
+        },
+        "expected_frequencies": pd.DataFrame(
+            expected_freqs,
+            index=contingency_table.index,
+            columns=contingency_table.columns
+        ),
+        "posthoc_results": posthoc_results,
+        "apa_summary": apa_summary,
+    }
+
+    return results
