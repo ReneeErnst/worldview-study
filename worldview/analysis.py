@@ -1,15 +1,17 @@
+import warnings
 import pandas as pd
 import pingouin as pg
 from statsmodels.formula.api import ols
 import statsmodels.api as sm
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
+from statsmodels.stats.weightstats import ttest_ind
 
 import scipy.stats as stats
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 
-def correlation_matrix(df_corrs: pd.DataFrame) -> pd.DataFrame:
+def pearsons_correlation_matrix(df_corrs: pd.DataFrame) -> pd.DataFrame:
     """
     Generate a cleaned-up correlation matrix with additional statistics.
 
@@ -39,6 +41,54 @@ def correlation_matrix(df_corrs: pd.DataFrame) -> pd.DataFrame:
     final_columns = ["X", "Y", "r", "CI95%", "p-value", "df", "Sample Size"]
 
     return df_corr_matrix[final_columns]
+
+
+def calculate_spearman_correlations(
+    df: pd.DataFrame, ordinal_col: str, continuous_cols: list
+) -> pd.DataFrame:
+    """
+    Calculates and formats Spearman correlations between one variable and a list of others.
+
+    This function uses Pingouin to compute pairwise Spearman correlations between a single
+    specified column (e.g., an ordinal variable) and a list of other columns
+    (e.g., continuous variables).
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing all the data.
+        ordinal_col (str): The name of the single column to use as the primary variable.
+        continuous_cols (list): A list of column names to correlate against the ordinal_col.
+
+    Returns:
+        pd.DataFrame: A cleaned-up DataFrame containing the specified correlation
+                      coefficients, CIs, p-values, and other statistics.
+    """
+    # Define the list of columns we are interested in.
+    all_cols = [ordinal_col] + continuous_cols
+
+    # Calculate the pairwise correlations only for the specified columns.
+    df_corr_matrix = pg.pairwise_corr(data=df[all_cols], method="spearman")
+
+    # FIX: Filter the matrix to only include pairs with the ordinal column as 'X'.
+    df_corr_matrix = df_corr_matrix[df_corr_matrix["X"] == ordinal_col].copy()
+
+    # Calculate and add the 'df' (degrees of freedom) column
+    df_corr_matrix["df"] = df_corr_matrix["n"] - 2
+
+    # Rename common columns for clarity
+    df_corr_matrix = df_corr_matrix.rename(
+        columns={"n": "Sample Size", "p-unc": "p-value", "r": "rs"}
+    )
+
+    # Define the desired columns for the final output
+    final_columns = ["X", "Y", "rs", "CI95%", "p-value", "df", "Sample Size"]
+
+    # Filter for columns that actually exist in the output to avoid errors
+    # (e.g., CI95% may not always be present)
+    final_columns_exist = [
+        col for col in final_columns if col in df_corr_matrix.columns
+    ]
+
+    return df_corr_matrix[final_columns_exist]
 
 
 def check_anova_assumptions(df: pd.DataFrame, group_col: str, dv_col: str):
@@ -98,23 +148,126 @@ def check_anova_assumptions(df: pd.DataFrame, group_col: str, dv_col: str):
     print("\n--- End of Assumption Check ---")
 
 
-def one_way_anova(df: pd.DataFrame, group_col: str, dv_col: str) -> tuple:
+def one_way_anova(
+    df: pd.DataFrame, group_col: str, dv_col: str, alpha: float = 0.05
+) -> tuple:
     """
-    Performs a one-way ANOVA and Tukey's HSD post-hoc test.
+    Performs a one-way ANOVA and, if the result is significant, Tukey's HSD post-hoc test.
 
     Args:
         df (pd.DataFrame): The pandas DataFrame containing the data.
         group_col (str): The name of the column containing the group labels.
         dv_col (str): The name of the column containing the values for the dependent variable.
+        alpha (float): The significance level to use for the ANOVA test. Defaults to 0.05.
 
     Returns:
-        tuple: A tuple containing the ANOVA table (statsmodels ANOVA object) and the Tukey's HSD results (statsmodels TukeyHSDResults object).
+        tuple: A tuple containing:
+               - anova_table (pd.DataFrame): The ANOVA results table.
+               - tukey_results (TukeyHSDResults or None): The Tukey's HSD results if the
+                 ANOVA is significant (p < alpha), otherwise None.
     """
-    # Perform one-way ANOVA
+    # --- 1. Perform one-way ANOVA ---
     model = ols(f"{dv_col} ~ C({group_col})", data=df).fit()
     anova_table = sm.stats.anova_lm(model, typ=1)
 
-    # Perform Tukey's HSD post-hoc test
-    tukey_results = pairwise_tukeyhsd(df[dv_col], df[group_col])
+    # --- 2. Check for significance ---
+    # Get the p-value from the ANOVA table. It's in the first row for the group effect.
+    p_value = anova_table["PR(>F)"].iloc[0]
+
+    # --- 3. Conditionally perform post-hoc test ---
+    tukey_results = None  # Initialize as None
+    if p_value < alpha:
+        tukey_results = pairwise_tukeyhsd(
+            endog=df[dv_col], groups=df[group_col], alpha=alpha
+        )
 
     return anova_table, tukey_results
+
+
+def get_chi2(df: pd.DataFrame, x: str, y: str) -> tuple:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        expected, observed, stats = pg.chi2_independence(data=df, x=x, y=y)
+
+    return stats[stats["test"] == "pearson"], expected, observed
+
+
+def get_independent_ttest(df: pd.DataFrame, x: str, y: str) -> pd.Series:
+    """
+    Performs an independent two-sample t-test between two groups using statsmodels.
+
+    It automatically chooses between a Student's t-test and a Welch's t-test.
+    If the ratio of the sample sizes is more severe than 2:1, it uses a
+    Welch's t-test. Otherwise, it uses a standard Student's t-test.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame containing the data.
+        x (str): Independent variable (grouping variable).
+        y (str): Dependent variable (continuous variable).
+
+    Returns:
+        pd.Series: contains the results, including which test was used,
+              the t-statistic, p-value, and degrees of freedom.
+    """
+    # Create a clean DataFrame by dropping rows with NaN in either the grouping or dependent variable.
+    df_clean = df[[x, y]].dropna()
+
+    # Get the unique values of the grouping variable from the cleaned data
+    x_values = df_clean[x].unique()
+    if len(x_values) != 2:
+        raise ValueError(
+            f"'{x}' must have exactly two unique valuesafter removing NaNs. "
+            f"Found {len(x_values)}: {list(x_values)}"
+        )
+
+    # Create the two arrays for comparison from the cleaned DataFrame
+    group1 = df_clean[df_clean[x] == x_values[0]][y]
+    group2 = df_clean[df_clean[x] == x_values[1]][y]
+
+    n1, n2 = len(group1), len(group2)
+
+    # This check is now mostly for safety, as dropna should prevent this.
+    if n1 == 0 or n2 == 0:
+        raise ValueError("One or both groups have no valid data after removing NaNs.")
+
+    # Determine which test to use based on the sample size ratio
+    ratio = max(n1, n2) / min(n1, n2)
+
+    print(f"\nIs there a significant difference in {y} by {x}?")
+    if ratio > 2:
+        test_type = "unequal"
+        test_name = "Welch's t-test (unequal variances)"
+        print("Using Welch's t-test due to unequal sample sizes (ratio > 2:1).")
+    else:
+        test_type = "pooled"
+        test_name = "Student's t-test (pooled variances)"
+        print(
+            "Using standard Student's t-test due to equal sample sizes (ratio <= 2:1)."
+        )
+
+    # Perform the independent t-test using statsmodels
+    t_stat, p_value, dof = ttest_ind(group1, group2, usevar=test_type)
+
+    if p_value < 0.05:
+        print(f"There is a significant difference in {y} by {x} (p = {p_value:.3f}).")
+    else:
+        print(f"There is no significant difference in {y} by {x} (p = {p_value:.3f}).")
+
+    return pd.DataFrame(
+        {
+            "Metric": [
+                "Test Used",
+                "Group Sizes",
+                "T-Statistic",
+                "P-Value",
+                "Degrees of Freedom",
+            ],
+            "Value": [
+                test_name,
+                f"{x_values[0]}: {n1}, {x_values[1]}: {n2}",
+                t_stat,
+                p_value,
+                dof,
+            ],
+        }
+    )
