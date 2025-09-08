@@ -1,5 +1,7 @@
 import pandas as pd
 
+import worldview
+
 
 def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -15,7 +17,7 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
 
     age = {1: "25-34", 2: "35-44", 3: "45-54", 4: "55-64", 6: "65-74", 7: "75+"}
 
-    gender = {1: "female", 2: "male", 3: "nonbinary", 4: "prefer not to answer"}
+    gender = {1: "female", 2: "male", 3: "nonbinary"}
 
     ethnicity = {
         1: "American Indian or Alaska Native",
@@ -25,7 +27,6 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         5: "Middle Eastern or North African",
         6: "Native Hawaiian or other Pacific Islander",
         7: "White",
-        8: "Prefer not to Answer",
     }
 
     education = {
@@ -36,7 +37,6 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         5: "Some graduate school",
         6: "Graduated with master’s degree",
         7: "Graduated with PhD",
-        8: "Prefer not to answer",
     }
 
     religion = {
@@ -47,7 +47,6 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         5: "Judaism",
         6: "Buddhist",
         7: "Hindu",
-        8: "Prefer not to answer",
         9: "Other (please specify)",
     }
 
@@ -69,37 +68,45 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         {1: "yes", 2: "no"}
     )
 
+    # rename column "transexual" to "transsexual" and clean values
+    df_out = df_out.rename(columns={"transexual": "transsexual"})
+
+    # Clean up values - "no", "No ", " NO" -> "no"
+    df_out["transsexual"] = df_out["transsexual"].str.strip().str.lower()
+
+    return df_out
+
+
+def clean_demographics(df: pd.DataFrame) -> pd.DataFrame:
+    """Cleans and standardizes demographic data.
+    Args:
+        df (pd.DataFrame): DataFrame containing demographic columns.
+    Returns:
+        pd.DataFrame: DataFrame with cleaned demographic values.
+    """
+    df_out = df.copy()
+
+    # If they entered "Muslim" in the other field, change their main religion to Muslim
     df_out.loc[
         df_out["religious_spiritual_orientation_other"].str.strip().str.lower()
         == "muslim",
         "religious_spiritual_orientation",
     ] = "Muslim"
 
-    df_out["education_cleaned"] = df_out["education"].copy()
-
-    df_out.loc[
-        df_out["education_cleaned"].str.contains("master’s", na=False),
-        "education_cleaned",
-    ] = "Master's"
+    # Check the other education field for keywords and update the main education field as needed
     df_out.loc[
         df_out["education_other"].str.contains("Masters", na=False),
-        "education_cleaned",
-    ] = "Master's"
+        "education",
+    ] = "Graduated with master’s degree"
 
-    df_out.loc[
-        df_out["education_cleaned"].str.contains("PhD", na=False),
-        "education_cleaned",
-    ] = "Doctorate"
     df_out.loc[
         df_out["education_other"].str.contains("JD", na=False),
-        "education_cleaned",
-    ] = "Doctorate"
+        "education",
+    ] = "Graduated with PhD"
     df_out.loc[
         df_out["education_other"].str.contains("MD", na=False),
-        "education_cleaned",
-    ] = "Doctorate"
-
-    df_out["transsexual"] = df_out["transexual"].str.strip().str.lower()
+        "education",
+    ] = "Graduated with PhD"
 
     return df_out
 
@@ -307,3 +314,50 @@ def calculate_worldview_scores(df: pd.DataFrame) -> pd.DataFrame:
         .pipe(assign_dominant_worldview)
     )
     return processed_df
+
+
+def create_prepped_data() -> pd.DataFrame:
+    """
+    Creates prepped/preprocessed data with all transformations and calculations applied.
+
+    Returns:
+        pd.DataFrame: The fully prepped/processed DataFrame.
+    """
+    data_loc = worldview.get_data_dir()
+    df = pd.read_excel(data_loc / "prepped_raw_data.xlsx", header=0, skiprows=[1])
+
+    df_prepped = (
+        df.pipe(demographics_mapping)
+        .pipe(clean_demographics)
+        .pipe(qes_scores)
+        .pipe(isi_subscale_scores)
+        .pipe(calculate_worldview_scores)
+    )
+
+    df_prepped.to_csv(data_loc / "prepped_full_data.csv")
+
+    keep_cols = [
+        "age_group",
+        "age_group_ordinal",
+        "gender",
+        "transsexual",
+        "ethnicity",
+        "education",
+        "religious_spiritual_orientation",
+        "feel_experience_changed",
+        "consider_open_inclusive",
+        "experience_open_inclusive",
+        "traditional_wvs_total",
+        "modern_wvs_total",
+        "postmodern_wvs_total",
+        "integrative_wvs_total",
+        "dominant_worldview",
+        "qes_total",
+        "isi_diffuse_avoidant_total",
+        "isi_informational_total",
+        "isi_normative_total",
+    ]
+
+    df_prepped[keep_cols].to_csv(data_loc / "prepped_filtered_data.csv")
+
+    return df_prepped
