@@ -16,9 +16,12 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
     df_out = df.copy()
 
     age = {1: "25-34", 2: "35-44", 3: "45-54", 4: "55-64", 6: "65-74", 7: "75+"}
+    df_out["age_group_ordinal"] = df_out["age_group"]
+    df_out["age_group"] = df_out["age_group"].map(age)
 
     gender = {1: "female", 2: "male", 3: "nonbinary"}
-
+    df_out["gender"] = df_out["gender"].map(gender)
+    
     ethnicity = {
         1: "American Indian or Alaska Native",
         2: "Asian or Asian American",
@@ -28,16 +31,28 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         6: "Native Hawaiian or other Pacific Islander",
         7: "White",
     }
-
+    df_out["ethnicity"] = df_out["ethnicity"].map(ethnicity)
+    
+    # combine some education levels
+    education_ordinal_map = {
+        1: 1,
+        2: 2, # "1-2 years college/associate’s degree/trade school/certifications",
+        3: 2, # "1-2 years college/associate’s degree/trade school/certifications",
+        4: 3, # "Graduated with Bachelors",
+        5: 3, # "Graduated with Bachelors",
+        6: 4,
+        7: 5,   
+    }
+    df_out["education_ordinal"] = df_out["education"].map(education_ordinal_map)
+    
     education = {
         1: "Highschool gradate or proficiency",
-        2: "Attended trade school/certifications",
-        3: "1-2 years college/associate’s degree",
-        4: "Graduated with Bachelors",
-        5: "Some graduate school",
-        6: "Graduated with master’s degree",
-        7: "Graduated with PhD",
+        2: "1-2 years college/associate’s degree/trade school/certifications",
+        3: "Graduated with Bachelors",
+        4: "Graduated with master’s degree",
+        5: "Graduated with PhD",
     }
+    df_out["education"] = df_out["education_ordinal"].map(education)
 
     religion = {
         1: "Spiritually eclectic",
@@ -49,15 +64,10 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         7: "Hindu",
         9: "Other (please specify)",
     }
-
-    df_out["age_group_ordinal"] = df_out["age_group"]
-    df_out["age_group"] = df_out["age_group"].map(age)
-    df_out["gender"] = df_out["gender"].map(gender)
-    df_out["ethnicity"] = df_out["ethnicity"].map(ethnicity)
-    df_out["education"] = df_out["education"].map(education)
     df_out["religious_spiritual_orientation"] = df_out[
         "religious_spiritual_orientation"
     ].map(religion)
+    
     df_out["feel_experience_changed"] = df_out["feel_experience_changed"].map(
         {1: "yes", 2: "no"}
     )
@@ -70,7 +80,6 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
 
     # rename column "transexual" to "transsexual" and clean values
     df_out = df_out.rename(columns={"transexual": "transsexual"})
-
     # Clean up values - "no", "No ", " NO" -> "no"
     df_out["transsexual"] = df_out["transsexual"].str.strip().str.lower()
 
@@ -92,6 +101,30 @@ def clean_demographics(df: pd.DataFrame) -> pd.DataFrame:
         == "muslim",
         "religious_spiritual_orientation",
     ] = "Muslim"
+    
+    # If they entered variations on catholic in the other field, change their main religion to Christian
+    df_out.loc[
+        df_out["religious_spiritual_orientation_other"].str.strip().str.lower().str.contains("catholic", na=False),
+        "religious_spiritual_orientation",
+    ] = "Christian"
+    
+    # If they entered variations on none in the other field, change their main religion to Atheist
+    df_out.loc[
+        df_out["religious_spiritual_orientation_other"].str.strip().str.lower().str.contains("none|nothing|not religious|no belief", na=False),
+        "religious_spiritual_orientation",
+    ] = "Atheist"
+    
+    # Reduce thee religion categories, combining Judaism, Buddhist, Hindu, and Muslim into "Other"
+    df_out["religious_spiritual_orientation_reduced"] = df_out[
+        "religious_spiritual_orientation"
+    ].replace(
+        {
+            "Judaism": "Other",
+            "Buddhist": "Other",
+            "Hindu": "Other",
+            "Muslim": "Other",
+        }
+    )
 
     # Check the other education field for keywords and update the main education field as needed
     df_out.loc[

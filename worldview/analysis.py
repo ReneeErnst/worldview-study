@@ -292,71 +292,71 @@ def run_chi2_analysis(
               expected frequencies, post-hoc results (if applicable), and an
               APA-formatted summary string.
     """
-    # --- 1. Create Contingency Table ---
+    # Create Contingency Table ---
     contingency_table = pd.crosstab(df[x], df[y])
     
-    # --- 2. Perform the Main Chi-Squared Test ---
+    # Perform the Main Chi-Squared Test ---
     chi2, p_value, dof, expected_freqs = chi2_contingency(contingency_table)
 
-    # --- 3. Calculate Sample Size and Effect Size (Cramer's V) ---
+    # Calculate Sample Size and Effect Size (Cramer's V) ---
     sample_size = contingency_table.sum().sum()
     min_dim = min(contingency_table.shape) - 1
     # Avoid division by zero if min_dim is 0 (e.g., a 1xN table)
     cramer_v = np.sqrt(chi2 / (sample_size * min_dim)) if min_dim > 0 else 0
 
-    # --- 4. Format the p-value for APA style ---
+    # Format the p-value for APA style ---
     if p_value < 0.001:
         p_apa = "< .001"
     else:
         p_apa = f"= {p_value:.3f}"
 
-    # --- 5. Create APA Summary String for the Main Test ---
+    # Create APA Summary String for the Main Test ---
     apa_summary = (
         f"χ²({dof}, N = {sample_size}) = {chi2:.2f}, "
         f"p {p_apa}, Cramer's V = {cramer_v:.2f}"
     )
 
-    # --- 6. Conditionally Perform Post-Hoc Tests ---
-    posthoc_results = None
+    # # Conditionally Perform Post-Hoc Tests ---
+    # posthoc_results = None
     if p_value < alpha:
-        print(f"Overall test was significant (p = {p_value:.4f}). Running post-hoc tests...")
+        print(f"Overall test was significant (p = {p_value:.4f}).")
         
-        # Manually perform pairwise chi-squared tests
-        groups = contingency_table.index.tolist()
-        all_pairs = list(combinations(groups, 2))
-        p_values_uncorrected = []
+    #     # Manually perform pairwise chi-squared tests
+    #     groups = contingency_table.index.tolist()
+    #     all_pairs = list(combinations(groups, 2))
+    #     p_values_uncorrected = []
 
-        for group1, group2 in all_pairs:
-            pair_table = contingency_table.loc[[group1, group2]]
+    #     for group1, group2 in all_pairs:
+    #         pair_table = contingency_table.loc[[group1, group2]]
             
-            # Remove columns where both groups have a count of 0 to prevent ValueError
-            pair_table = pair_table.loc[:, pair_table.sum(axis=0) > 0]
+    #         # Remove columns where both groups have a count of 0 to prevent ValueError
+    #         pair_table = pair_table.loc[:, pair_table.sum(axis=0) > 0]
             
-            # If table is too small after filtering, test is not meaningful
-            if pair_table.shape[1] < 2:
-                p_uncorr = 1.0
-            else:
-                # Run chi2 test on the 2xN table for the pair
-                _, p_uncorr, _, _ = chi2_contingency(pair_table, correction=False)
+    #         # If table is too small after filtering, test is not meaningful
+    #         if pair_table.shape[1] < 2:
+    #             p_uncorr = 1.0
+    #         else:
+    #             # Run chi2 test on the 2xN table for the pair
+    #             _, p_uncorr, _, _ = chi2_contingency(pair_table, correction=False)
             
-            p_values_uncorrected.append(p_uncorr)
+    #         p_values_uncorrected.append(p_uncorr)
 
-        # Correct the p-values using statsmodels
-        reject, p_values_corrected, _, _ = multipletests(
-            p_values_uncorrected, alpha=alpha, method=p_adjust_method
-        )
+    #     # Correct the p-values using statsmodels
+    #     reject, p_values_corrected, _, _ = multipletests(
+    #         p_values_uncorrected, alpha=alpha, method=p_adjust_method
+    #     )
 
-        # Create a clean matrix for the results
-        posthoc_df = pd.DataFrame(np.nan, index=groups, columns=groups)
-        for (group1, group2), p_corr in zip(all_pairs, p_values_corrected):
-            posthoc_df.loc[group1, group2] = p_corr
-            posthoc_df.loc[group2, group1] = p_corr
+    #     # Create a clean matrix for the results
+    #     posthoc_df = pd.DataFrame(np.nan, index=groups, columns=groups)
+    #     for (group1, group2), p_corr in zip(all_pairs, p_values_corrected):
+    #         posthoc_df.loc[group1, group2] = p_corr
+    #         posthoc_df.loc[group2, group1] = p_corr
         
-        np.fill_diagonal(posthoc_df.values, 1.0)
-        posthoc_results = posthoc_df
+    #     np.fill_diagonal(posthoc_df.values, 1.0)
+    #     posthoc_results = posthoc_df
 
     else:
-        print(f"Overall test was not significant (p = {p_value:.4f}). Skipping post-hoc tests.")
+        print(f"Overall test was not significant (p = {p_value:.4f}).")
         
     # --- 7. Compile All Results into a Dictionary ---
     results = {
@@ -373,7 +373,7 @@ def run_chi2_analysis(
             index=contingency_table.index,
             columns=contingency_table.columns
         ),
-        "posthoc_results": posthoc_results,
+        # "posthoc_results": posthoc_results,
         "apa_summary": apa_summary,
     }
 
