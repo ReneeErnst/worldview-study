@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 import worldview
 
@@ -14,14 +15,31 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         pd.DataFrame: DataFrame with mapped demographic values.
     """
     df_out = df.copy()
-
-    age = {1: "25-34", 2: "35-44", 3: "45-54", 4: "55-64", 6: "65-74", 7: "75+"}
+    
     df_out["age_group_ordinal"] = df_out["age_group"]
+    
+    age = {1: "25-34", 2: "35-44", 3: "45-54", 4: "55-64", 5: "65-74", 6: "75+"}
     df_out["age_group"] = df_out["age_group"].map(age)
+    
+    # Combine the last two groups to 65+
+    df_out["age_group_65_ordinal"] = df_out["age_group_ordinal"].replace(6, 5)
+    age_65 = {1: "25-34", 2: "35-44", 3: "45-54", 4: "55-64+", 5: "65+"}
+    df_out["age_group_65"] = df_out["age_group_65_ordinal"].map(age_65)
+    
+    # Combine 55-64 with 65+, to create 55+
+    df_out["age_group_55_ordinal"] = df_out["age_group_65_ordinal"].replace(5, 4)
+    age_55 = {1: "25-34", 2: "35-44", 3: "45-54", 4: "55+"}
+    df_out["age_group_55"] = df_out["age_group_55_ordinal"].map(age_55)
+    
+    # age group - 2 levels (under and over 45)
+    age_reduced = {1: "under 45", 2: "under 45", 3: "45 and older", 4: "45 and older", 5: "45 and older", 6: "45 and older"}
+    df_out["age_group_2_levels"] = df_out["age_group_ordinal"].map(age_reduced)
 
     gender = {1: "female", 2: "male", 3: "nonbinary"}
     df_out["gender"] = df_out["gender"].map(gender)
+    df_out["gender_2"] = df_out["gender"].replace("nonbinary", np.nan)
     
+    # No additional/cleaning groups for this, per request
     ethnicity = {
         1: "American Indian or Alaska Native",
         2: "Asian or Asian American",
@@ -33,27 +51,86 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
     }
     df_out["ethnicity"] = df_out["ethnicity"].map(ethnicity)
     
-    # combine some education levels
-    education_ordinal_map = {
+    # Education - treat 0s (Other - please specify) and 8s (Prefer not to Answer)
+    # as NaN - we will fill them in as able from the text item
+    df_out["education"] = df_out["education"].replace(0, np.nan)
+    df_out["education"] = df_out["education"].replace(8, np.nan)
+    
+    # Use text to clean up the education value before other updates
+    # Check the other education field for keywords and update the main education field as needed
+    df_out.loc[
+        df_out["education_other"].str.contains("Masters", na=False),
+        "education",
+    ] = 6
+    df_out.loc[
+        df_out["education_other"].str.contains("JD", na=False),
+        "education",
+    ] = 7
+    df_out.loc[
+        df_out["education_other"].str.contains("MD", na=False),
+        "education",
+    ] = 7
+    
+    # Create ordinal education var without any collapsing of groups
+    df_out["education_ordinal"] = df_out["education"]
+    
+    # Education to text values
+    education_map = {
+        1: "Highschool gradate or proficiency",
+        2: "Attended trade school/certifications",
+        3: "1-2 years college/associate’s degree",
+        4: "Graduated with Bachelors",
+        5: "Some graduate school",
+        6: "Graduated with master’s degree", 
+        7: "Graduated with PhD"
+    }
+    df_out["education"] = df_out["education"].map(education_map)
+    
+    # Condense the education vars into 5 levels
+    education_5_levels_ordinal_map = {
         1: 1,
         2: 2, # "1-2 years college/associate’s degree/trade school/certifications",
         3: 2, # "1-2 years college/associate’s degree/trade school/certifications",
         4: 3, # "Graduated with Bachelors",
         5: 3, # "Graduated with Bachelors",
         6: 4,
-        7: 5,   
+        7: 5,  
     }
-    df_out["education_ordinal"] = df_out["education"].map(education_ordinal_map)
+    df_out["education_ordinal_5_levels"] = df_out["education_ordinal"].map(education_5_levels_ordinal_map)
     
-    education = {
+    education_5_level = {
         1: "Highschool gradate or proficiency",
         2: "1-2 years college/associate’s degree/trade school/certifications",
         3: "Graduated with Bachelors",
         4: "Graduated with master’s degree",
-        5: "Graduated with PhD",
+        5: "Graduated with PhD", 
     }
-    df_out["education"] = df_out["education_ordinal"].map(education)
+    df_out["education_5_levels"] = df_out["education_ordinal_5_levels"].map(education_5_level)
 
+    # Religion - treat 0s (Other - please specify) and 8s (Prefer not to Answer)
+    # as NaN - we will fill them in as able from the text item
+    df_out["religious_spiritual_orientation"] = df_out["religious_spiritual_orientation"].replace(0, np.nan)
+    df_out["religious_spiritual_orientation"] = df_out["religious_spiritual_orientation"].replace(8, np.nan)
+    
+    # Clean up religion based on the other field
+    # If they entered "Muslim" in the other field, put them in the new 8 group
+    df_out.loc[
+        df_out["religious_spiritual_orientation_other"].str.strip().str.lower()
+        == "muslim",
+        "religious_spiritual_orientation",
+    ] = 8
+    # If they entered variations on catholic in the other field, change their main religion to Christian
+    df_out.loc[
+        df_out["religious_spiritual_orientation_other"].str.strip().str.lower().str.contains("catholic", na=False),
+        "religious_spiritual_orientation",
+    ] = 4
+    # If they entered variations on none in the other field, change their main religion to Atheist
+    df_out.loc[
+        df_out["religious_spiritual_orientation_other"].str.strip().str.lower().str.contains("none|nothing|not religious|no belief", na=False),
+        "religious_spiritual_orientation",
+    ] = 3
+    
+    # Convert the categorical religion to corresponding text value
     religion = {
         1: "Spiritually eclectic",
         2: "Agnostic",
@@ -62,59 +139,13 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         5: "Judaism",
         6: "Buddhist",
         7: "Hindu",
-        9: "Other (please specify)",
+        8: "Muslim",
     }
     df_out["religious_spiritual_orientation"] = df_out[
         "religious_spiritual_orientation"
     ].map(religion)
     
-    df_out["feel_experience_changed"] = df_out["feel_experience_changed"].map(
-        {1: "yes", 2: "no"}
-    )
-    df_out["consider_open_inclusive"] = df_out["consider_open_inclusive"].map(
-        {1: "yes", 2: "no"}
-    )
-    df_out["experience_open_inclusive"] = df_out["experience_open_inclusive"].map(
-        {1: "yes", 2: "no"}
-    )
-
-    # rename column "transexual" to "transsexual" and clean values
-    df_out = df_out.rename(columns={"transexual": "transsexual"})
-    # Clean up values - "no", "No ", " NO" -> "no"
-    df_out["transsexual"] = df_out["transsexual"].str.strip().str.lower()
-
-    return df_out
-
-
-def clean_demographics(df: pd.DataFrame) -> pd.DataFrame:
-    """Cleans and standardizes demographic data.
-    Args:
-        df (pd.DataFrame): DataFrame containing demographic columns.
-    Returns:
-        pd.DataFrame: DataFrame with cleaned demographic values.
-    """
-    df_out = df.copy()
-
-    # If they entered "Muslim" in the other field, change their main religion to Muslim
-    df_out.loc[
-        df_out["religious_spiritual_orientation_other"].str.strip().str.lower()
-        == "muslim",
-        "religious_spiritual_orientation",
-    ] = "Muslim"
-    
-    # If they entered variations on catholic in the other field, change their main religion to Christian
-    df_out.loc[
-        df_out["religious_spiritual_orientation_other"].str.strip().str.lower().str.contains("catholic", na=False),
-        "religious_spiritual_orientation",
-    ] = "Christian"
-    
-    # If they entered variations on none in the other field, change their main religion to Atheist
-    df_out.loc[
-        df_out["religious_spiritual_orientation_other"].str.strip().str.lower().str.contains("none|nothing|not religious|no belief", na=False),
-        "religious_spiritual_orientation",
-    ] = "Atheist"
-    
-    # Reduce thee religion categories, combining Judaism, Buddhist, Hindu, and Muslim into "Other"
+    # Reduce the religion categories, combining Judaism, Buddhist, Hindu, and Muslim into "Other"
     df_out["religious_spiritual_orientation_reduced"] = df_out[
         "religious_spiritual_orientation"
     ].replace(
@@ -125,21 +156,21 @@ def clean_demographics(df: pd.DataFrame) -> pd.DataFrame:
             "Muslim": "Other",
         }
     )
-
-    # Check the other education field for keywords and update the main education field as needed
-    df_out.loc[
-        df_out["education_other"].str.contains("Masters", na=False),
-        "education",
-    ] = "Graduated with master’s degree"
-
-    df_out.loc[
-        df_out["education_other"].str.contains("JD", na=False),
-        "education",
-    ] = "Graduated with PhD"
-    df_out.loc[
-        df_out["education_other"].str.contains("MD", na=False),
-        "education",
-    ] = "Graduated with PhD"
+    
+    # rename column "transexual" to "transsexual" and clean values
+    df_out = df_out.rename(columns={"transexual": "transsexual"})
+    # Clean up values - "no", "No ", " NO" -> "no"
+    df_out["transsexual"] = df_out["transsexual"].str.strip().str.lower()
+    
+    df_out["feel_experience_changed"] = df_out["feel_experience_changed"].map(
+        {1: "yes", 2: "no"}
+    )
+    df_out["consider_open_inclusive"] = df_out["consider_open_inclusive"].map(
+        {1: "yes", 2: "no"}
+    )
+    df_out["experience_open_inclusive"] = df_out["experience_open_inclusive"].map(
+        {1: "yes", 2: "no"}
+    )
 
     return df_out
 
@@ -247,7 +278,7 @@ def worldview_transformations(df: pd.DataFrame) -> pd.DataFrame:
     """
     df_out = df.copy()
     wvs_cols = [col for col in df_out.columns if col.startswith("wvs_")]
-    score_map = {4: 1, 3: 0, 2: 0, 1: -1}
+    score_map = {1: 1, 2: 0, 3: 0, 4: -1}
 
     for col in wvs_cols:
         transformed_col_name = f"transformed_{col}"
@@ -361,7 +392,6 @@ def create_prepped_data() -> pd.DataFrame:
 
     df_prepped = (
         df.pipe(demographics_mapping)
-        .pipe(clean_demographics)
         .pipe(qes_scores)
         .pipe(isi_subscale_scores)
         .pipe(calculate_worldview_scores)
@@ -372,11 +402,21 @@ def create_prepped_data() -> pd.DataFrame:
     keep_cols = [
         "age_group",
         "age_group_ordinal",
+        "age_group_65",
+        "age_group_65_ordinal",
+        "age_group_55", 
+        "age_group_55_ordinal",
+        "age_group_2_levels",
         "gender",
-        "transsexual",
+        "gender_2",
         "ethnicity",
         "education",
+        "education_ordinal",
+        "education_5_levels",
+        "education_ordinal_5_levels",
         "religious_spiritual_orientation",
+        "religious_spiritual_orientation_reduced",
+        "transsexual",
         "feel_experience_changed",
         "consider_open_inclusive",
         "experience_open_inclusive",
