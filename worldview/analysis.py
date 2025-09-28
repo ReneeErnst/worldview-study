@@ -294,14 +294,19 @@ def run_chi2_analysis(
     """
     # Create Contingency Table (Observed Frequencies) ---
     contingency_table = pd.crosstab(df[x], df[y])
-    
+
     # Calculate and Format Row Percentages
-    row_percentages = pd.crosstab(df[x], df[y], normalize='index') * 100
-    
+    row_percentages = pd.crosstab(df[x], df[y], normalize="index") * 100
+
     # Create a new DataFrame to combine counts and percentages
     combined_table = contingency_table.copy()
     for col in combined_table.columns:
-        combined_table[col] = combined_table[col].astype(str) + " (" + row_percentages[col].round(2).astype(str) + "%)"
+        combined_table[col] = (
+            combined_table[col].astype(str)
+            + " ("
+            + row_percentages[col].round(2).astype(str)
+            + "%)"
+        )
 
     # Perform the Main Chi-Squared Test ---
     chi2, p_value, dof, expected_freqs = chi2_contingency(contingency_table)
@@ -328,12 +333,12 @@ def run_chi2_analysis(
     if p_value < alpha:
         print(f"Overall test was significant (p = {p_value:.4f}).")
         print(f"Conducting post-hoc tests with {p_adjust_method} correction.")
-        
+
         groups = contingency_table.index.tolist()
         categories = contingency_table.columns.tolist()
-        
+
         all_pairs = list(combinations(groups, 2))
-        
+
         # A list to store the results of each 2x2 test
         posthoc_data = []
 
@@ -341,48 +346,58 @@ def run_chi2_analysis(
         for group1, group2 in all_pairs:
             for category in categories:
                 # Build the 2x2 contingency table for the comparison
-                table_data = np.array([
+                table_data = np.array(
                     [
-                        contingency_table.loc[group1, category],
-                        contingency_table.loc[group1, :].sum() - contingency_table.loc[group1, category],
-                    ],
-                    [
-                        contingency_table.loc[group2, category],
-                        contingency_table.loc[group2, :].sum() - contingency_table.loc[group2, category],
-                    ],
-                ])
-                
+                        [
+                            contingency_table.loc[group1, category],
+                            contingency_table.loc[group1, :].sum()
+                            - contingency_table.loc[group1, category],
+                        ],
+                        [
+                            contingency_table.loc[group2, category],
+                            contingency_table.loc[group2, :].sum()
+                            - contingency_table.loc[group2, category],
+                        ],
+                    ]
+                )
+
                 # Check for zero rows or columns to prevent ValueError
-                if np.any(table_data.sum(axis=0) == 0) or np.any(table_data.sum(axis=1) == 0):
-                    p_uncorr = 1.0 # No difference if one category has zero counts
+                if np.any(table_data.sum(axis=0) == 0) or np.any(
+                    table_data.sum(axis=1) == 0
+                ):
+                    p_uncorr = 1.0  # No difference if one category has zero counts
                 else:
                     # Perform the Chi-squared test on the 2x2 table
                     _, p_uncorr, _, _ = chi2_contingency(table_data, correction=False)
-                
+
                 # Store the uncorrected p-value and relevant info
-                posthoc_data.append({
-                    "group1": group1,
-                    "group2": group2,
-                    "category": category,
-                    "p_uncorrected": p_uncorr,
-                })
+                posthoc_data.append(
+                    {
+                        "group1": group1,
+                        "group2": group2,
+                        "category": category,
+                        "p_uncorrected": p_uncorr,
+                    }
+                )
 
         # Apply p-value correction to the uncorrected p-values
-        p_values_uncorrected = [d['p_uncorrected'] for d in posthoc_data]
+        p_values_uncorrected = [d["p_uncorrected"] for d in posthoc_data]
         reject, p_values_corrected, _, _ = multipletests(
             p_values_uncorrected, alpha=alpha, method=p_adjust_method
         )
-        
+
         # Update the results with corrected p-values and significance flags
         for i, (p_corr, sig) in enumerate(zip(p_values_corrected, reject)):
             posthoc_data[i]["p_corrected"] = p_corr
             posthoc_data[i]["significant"] = sig
-            
+
         posthoc_results = pd.DataFrame(posthoc_data)
 
     else:
-        print(f"Overall test was not significant (p = {p_value:.4f}). No post-hoc tests were performed.")
-        
+        print(
+            f"Overall test was not significant (p = {p_value:.4f}). No post-hoc tests were performed."
+        )
+
     # Compile All Results into a Dictionary
     results = {
         "contingency_table": combined_table,
@@ -396,7 +411,7 @@ def run_chi2_analysis(
         "expected_frequencies": pd.DataFrame(
             expected_freqs,
             index=contingency_table.index,
-            columns=contingency_table.columns
+            columns=contingency_table.columns,
         ),
         "posthoc_results": posthoc_results,
         "apa_summary": apa_summary,
@@ -414,70 +429,42 @@ def run_multinomial_regression(df, iv_name, dv_name):
         df (pd.DataFrame): The input DataFrame containing the data.
         iv_name (str): The name of the continuous independent variable column.
         dv_name (str): The name of the categorical dependent variable column.
-        
+
     Returns:
         statsmodels.discrete.discrete_model.MNLogitResults: The fitted model results object.
     """
-    
+
     # Check if the dependent variable exists in the DataFrame
     if dv_name not in df.columns:
         raise ValueError(f"Dependent variable '{dv_name}' not found in the DataFrame.")
-    
+
     # Check if the independent variable exists in the DataFrame
     if iv_name not in df.columns:
-        raise ValueError(f"Independent variable '{iv_name}' not found in the DataFrame.")
+        raise ValueError(
+            f"Independent variable '{iv_name}' not found in the DataFrame."
+        )
 
     # Check if the dependent variable is categorical
-    if not pd.api.types.is_categorical_dtype(df[dv_name]) and not pd.api.types.is_object_dtype(df[dv_name]):
-        print(f"Warning: Dependent variable '{dv_name}' is not of a categorical type. Attempting to convert.")
-        df[dv_name] = df[dv_name].astype('category')
-    
+    if not pd.api.types.is_categorical_dtype(
+        df[dv_name]
+    ) and not pd.api.types.is_object_dtype(df[dv_name]):
+        print(
+            f"Warning: Dependent variable '{dv_name}' is not of a categorical type. Attempting to convert."
+        )
+        df[dv_name] = df[dv_name].astype("category")
+
     # Define the independent (X) and dependent (y) variables
     X = df[iv_name]
     y = df[dv_name]
 
     # Encode the categorical dependent variable into numerical format
-    y_encoded = y.astype('category').cat.codes
+    y_encoded = y.astype("category").cat.codes
 
     # Add a constant to the independent variable for the intercept
     X = sm.add_constant(X)
 
     # Fit the Multinomial Logistic Regression model
     model = sm.MNLogit(y_encoded, X)
-    try:
-        mnlogit_fit = model.fit(method='newton', maxiter=100)
-    except Exception as e:
-        print(f"An error occurred during model fitting: {e}")
-        print("You may need to try a different optimization method, such as 'bfgs' or 'lbfgs'.")
-        return None
-
-    # Print the full summary table
-    print(mnlogit_fit.summary())
-    print("\n" + "="*80)
-    
-    # Calculate and print odds ratios
-    print("\nOdds Ratios and 95% Confidence Intervals")
-    
-    # # Exponentiate the coefficients
-    # odds_ratios = np.exp(mnlogit_fit.params)
-    
-    # # Exponentiate the confidence intervals
-    # conf_int = np.exp(mnlogit_fit.conf_int())
-    
-    # # Create a DataFrame for a clean output
-    # odds_ratio_df = pd.DataFrame(
-    #     {
-    #         'Odds Ratio': odds_ratios[iv_name],
-    #         '95% CI Lower': conf_int.loc[:, iv_name][0],
-    #         '95% CI Upper': conf_int.loc[:, iv_name][1]
-    #     }
-    # )
-    
-    # # Get the category labels from the original dependent variable
-    # dv_labels = y.cat.categories
-    # ref_category = dv_labels[0]
-    
-    # # Label the rows for clarity
-    # odds_ratio_df.index = [f'{label} vs. {ref_category}' for label in dv_labels[1:]]
+    mnlogit_fit = model.fit(method="newton", maxiter=100)
 
     return mnlogit_fit
