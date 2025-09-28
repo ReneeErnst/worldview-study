@@ -269,7 +269,7 @@ def get_independent_ttest(df: pd.DataFrame, x: str, y: str) -> pd.Series:
 
 
 def run_chi2_analysis(
-    df: pd.DataFrame, x: str, y: str, alpha: float = 0.05, p_adjust_method: str = "bonferroni"
+    df: pd.DataFrame, x: str, y: str, alpha: float = 0.05, p_adjust_method: str = "holm"
 ) -> dict:
     """
     Performs a Chi-squared test of independence and, if significant,
@@ -285,7 +285,7 @@ def run_chi2_analysis(
         alpha (float): The significance level. Defaults to 0.05.
         p_adjust_method (str): The p-value adjustment method for post-hoc tests.
                                See statsmodels.stats.multitest.multipletests
-                               documentation for options. Defaults to "bonferroni".
+                               documentation for options. Defaults to "holm".
 
     Returns:
         dict: A dictionary containing the contingency table, main test results,
@@ -341,7 +341,7 @@ def run_chi2_analysis(
         for group1, group2 in all_pairs:
             for category in categories:
                 # Build the 2x2 contingency table for the comparison
-                table_data = [
+                table_data = np.array([
                     [
                         contingency_table.loc[group1, category],
                         contingency_table.loc[group1, :].sum() - contingency_table.loc[group1, category],
@@ -350,10 +350,14 @@ def run_chi2_analysis(
                         contingency_table.loc[group2, category],
                         contingency_table.loc[group2, :].sum() - contingency_table.loc[group2, category],
                     ],
-                ]
+                ])
                 
-                # Perform the Chi-squared test on the 2x2 table
-                _, p_uncorr, _, _ = chi2_contingency(table_data, correction=False)
+                # Check for zero rows or columns to prevent ValueError
+                if np.any(table_data.sum(axis=0) == 0) or np.any(table_data.sum(axis=1) == 0):
+                    p_uncorr = 1.0 # No difference if one category has zero counts
+                else:
+                    # Perform the Chi-squared test on the 2x2 table
+                    _, p_uncorr, _, _ = chi2_contingency(table_data, correction=False)
                 
                 # Store the uncorrected p-value and relevant info
                 posthoc_data.append({
@@ -399,3 +403,81 @@ def run_chi2_analysis(
     }
 
     return results
+
+
+def run_multinomial_regression(df, iv_name, dv_name):
+    """
+    Performs multinomial logistic regression and prints the results,
+    including odds ratios and their confidence intervals.
+
+    Args:
+        df (pd.DataFrame): The input DataFrame containing the data.
+        iv_name (str): The name of the continuous independent variable column.
+        dv_name (str): The name of the categorical dependent variable column.
+        
+    Returns:
+        statsmodels.discrete.discrete_model.MNLogitResults: The fitted model results object.
+    """
+    
+    # Check if the dependent variable exists in the DataFrame
+    if dv_name not in df.columns:
+        raise ValueError(f"Dependent variable '{dv_name}' not found in the DataFrame.")
+    
+    # Check if the independent variable exists in the DataFrame
+    if iv_name not in df.columns:
+        raise ValueError(f"Independent variable '{iv_name}' not found in the DataFrame.")
+
+    # Check if the dependent variable is categorical
+    if not pd.api.types.is_categorical_dtype(df[dv_name]) and not pd.api.types.is_object_dtype(df[dv_name]):
+        print(f"Warning: Dependent variable '{dv_name}' is not of a categorical type. Attempting to convert.")
+        df[dv_name] = df[dv_name].astype('category')
+    
+    # Define the independent (X) and dependent (y) variables
+    X = df[iv_name]
+    y = df[dv_name]
+
+    # Encode the categorical dependent variable into numerical format
+    y_encoded = y.astype('category').cat.codes
+
+    # Add a constant to the independent variable for the intercept
+    X = sm.add_constant(X)
+
+    # Fit the Multinomial Logistic Regression model
+    model = sm.MNLogit(y_encoded, X)
+    try:
+        mnlogit_fit = model.fit(method='newton', maxiter=100)
+    except Exception as e:
+        print(f"An error occurred during model fitting: {e}")
+        print("You may need to try a different optimization method, such as 'bfgs' or 'lbfgs'.")
+        return None
+
+    # Print the full summary table
+    print(mnlogit_fit.summary())
+    print("\n" + "="*80)
+    
+    # Calculate and print odds ratios
+    print("\nOdds Ratios and 95% Confidence Intervals")
+    
+    # # Exponentiate the coefficients
+    # odds_ratios = np.exp(mnlogit_fit.params)
+    
+    # # Exponentiate the confidence intervals
+    # conf_int = np.exp(mnlogit_fit.conf_int())
+    
+    # # Create a DataFrame for a clean output
+    # odds_ratio_df = pd.DataFrame(
+    #     {
+    #         'Odds Ratio': odds_ratios[iv_name],
+    #         '95% CI Lower': conf_int.loc[:, iv_name][0],
+    #         '95% CI Upper': conf_int.loc[:, iv_name][1]
+    #     }
+    # )
+    
+    # # Get the category labels from the original dependent variable
+    # dv_labels = y.cat.categories
+    # ref_category = dv_labels[0]
+    
+    # # Label the rows for clarity
+    # odds_ratio_df.index = [f'{label} vs. {ref_category}' for label in dv_labels[1:]]
+
+    return mnlogit_fit
