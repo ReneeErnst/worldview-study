@@ -292,16 +292,23 @@ def run_chi2_analysis(
               expected frequencies, post-hoc results (if applicable), and an
               APA-formatted summary string.
     """
-    # Create Contingency Table ---
+    # Create Contingency Table (Observed Frequencies) ---
     contingency_table = pd.crosstab(df[x], df[y])
     
+    # Calculate and Format Row Percentages
+    row_percentages = pd.crosstab(df[x], df[y], normalize='index') * 100
+    
+    # Create a new DataFrame to combine counts and percentages
+    combined_table = contingency_table.copy()
+    for col in combined_table.columns:
+        combined_table[col] = combined_table[col].astype(str) + " (" + row_percentages[col].round(2).astype(str) + "%)"
+
     # Perform the Main Chi-Squared Test ---
     chi2, p_value, dof, expected_freqs = chi2_contingency(contingency_table)
 
     # Calculate Sample Size and Effect Size (Cramer's V) ---
     sample_size = contingency_table.sum().sum()
     min_dim = min(contingency_table.shape) - 1
-    # Avoid division by zero if min_dim is 0 (e.g., a 1xN table)
     cramer_v = np.sqrt(chi2 / (sample_size * min_dim)) if min_dim > 0 else 0
 
     # Format the p-value for APA style ---
@@ -316,51 +323,65 @@ def run_chi2_analysis(
         f"p {p_apa}, Cramer's V = {cramer_v:.2f}"
     )
 
-    # # Conditionally Perform Post-Hoc Tests ---
-    # posthoc_results = None
+    # Conditionally Perform Post-Hoc Tests ---
+    posthoc_results = None
     if p_value < alpha:
         print(f"Overall test was significant (p = {p_value:.4f}).")
+        print(f"Conducting post-hoc tests with {p_adjust_method} correction.")
         
-    #     # Manually perform pairwise chi-squared tests
-    #     groups = contingency_table.index.tolist()
-    #     all_pairs = list(combinations(groups, 2))
-    #     p_values_uncorrected = []
-
-    #     for group1, group2 in all_pairs:
-    #         pair_table = contingency_table.loc[[group1, group2]]
-            
-    #         # Remove columns where both groups have a count of 0 to prevent ValueError
-    #         pair_table = pair_table.loc[:, pair_table.sum(axis=0) > 0]
-            
-    #         # If table is too small after filtering, test is not meaningful
-    #         if pair_table.shape[1] < 2:
-    #             p_uncorr = 1.0
-    #         else:
-    #             # Run chi2 test on the 2xN table for the pair
-    #             _, p_uncorr, _, _ = chi2_contingency(pair_table, correction=False)
-            
-    #         p_values_uncorrected.append(p_uncorr)
-
-    #     # Correct the p-values using statsmodels
-    #     reject, p_values_corrected, _, _ = multipletests(
-    #         p_values_uncorrected, alpha=alpha, method=p_adjust_method
-    #     )
-
-    #     # Create a clean matrix for the results
-    #     posthoc_df = pd.DataFrame(np.nan, index=groups, columns=groups)
-    #     for (group1, group2), p_corr in zip(all_pairs, p_values_corrected):
-    #         posthoc_df.loc[group1, group2] = p_corr
-    #         posthoc_df.loc[group2, group1] = p_corr
+        groups = contingency_table.index.tolist()
+        categories = contingency_table.columns.tolist()
         
-    #     np.fill_diagonal(posthoc_df.values, 1.0)
-    #     posthoc_results = posthoc_df
+        all_pairs = list(combinations(groups, 2))
+        
+        # A list to store the results of each 2x2 test
+        posthoc_data = []
+
+        # Loop through all pairs of groups and all categories
+        for group1, group2 in all_pairs:
+            for category in categories:
+                # Build the 2x2 contingency table for the comparison
+                table_data = [
+                    [
+                        contingency_table.loc[group1, category],
+                        contingency_table.loc[group1, :].sum() - contingency_table.loc[group1, category],
+                    ],
+                    [
+                        contingency_table.loc[group2, category],
+                        contingency_table.loc[group2, :].sum() - contingency_table.loc[group2, category],
+                    ],
+                ]
+                
+                # Perform the Chi-squared test on the 2x2 table
+                _, p_uncorr, _, _ = chi2_contingency(table_data, correction=False)
+                
+                # Store the uncorrected p-value and relevant info
+                posthoc_data.append({
+                    "group1": group1,
+                    "group2": group2,
+                    "category": category,
+                    "p_uncorrected": p_uncorr,
+                })
+
+        # Apply p-value correction to the uncorrected p-values
+        p_values_uncorrected = [d['p_uncorrected'] for d in posthoc_data]
+        reject, p_values_corrected, _, _ = multipletests(
+            p_values_uncorrected, alpha=alpha, method=p_adjust_method
+        )
+        
+        # Update the results with corrected p-values and significance flags
+        for i, (p_corr, sig) in enumerate(zip(p_values_corrected, reject)):
+            posthoc_data[i]["p_corrected"] = p_corr
+            posthoc_data[i]["significant"] = sig
+            
+        posthoc_results = pd.DataFrame(posthoc_data)
 
     else:
-        print(f"Overall test was not significant (p = {p_value:.4f}).")
+        print(f"Overall test was not significant (p = {p_value:.4f}). No post-hoc tests were performed.")
         
-    # --- 7. Compile All Results into a Dictionary ---
+    # Compile All Results into a Dictionary
     results = {
-        "contingency_table": contingency_table,
+        "contingency_table": combined_table,
         "main_test": {
             "chi2_statistic": chi2,
             "dof": dof,
@@ -373,7 +394,7 @@ def run_chi2_analysis(
             index=contingency_table.index,
             columns=contingency_table.columns
         ),
-        # "posthoc_results": posthoc_results,
+        "posthoc_results": posthoc_results,
         "apa_summary": apa_summary,
     }
 
