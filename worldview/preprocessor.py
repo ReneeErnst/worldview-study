@@ -106,6 +106,25 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         5: "Graduated with PhD", 
     }
     df_out["education_5_levels"] = df_out["education_ordinal_5_levels"].map(education_5_level)
+    
+    # combine the graduate degree - condense the education vars into 4 levels
+    education_4_levels_ordinal_map = {
+        1: 1,
+        2: 2, 
+        3: 3, 
+        4: 4, 
+        5: 4,
+    }
+    df_out["education_ordinal_4_levels"] = df_out["education_ordinal_5_levels"].map(education_4_levels_ordinal_map)
+    
+    education_4_level = {
+        1: "Highschool gradate or proficiency",
+        2: "1-2 years college/associate’s degree/trade school/certifications",
+        3: "Graduated with Bachelors",
+        4: "Graduate Degree",
+        5: "Graduate Degree", 
+    }
+    df_out["education_4_levels"] = df_out["education_ordinal_4_levels"].map(education_4_level)
 
     # Religion - treat 0s (Other - please specify) and 8s (Prefer not to Answer)
     # as NaN - we will fill them in as able from the text item
