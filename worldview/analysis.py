@@ -5,6 +5,7 @@ from statsmodels.formula.api import ols
 import statsmodels.api as sm
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.stats.weightstats import ttest_ind
+import statsmodels.formula.api as smf
 import numpy as np
 from scipy.stats import chi2_contingency
 import scipy.stats as stats
@@ -420,7 +421,7 @@ def run_chi2_analysis(
     return results
 
 
-def run_multinomial_regression(df, iv_name, dv_name):
+def run_multinomial_regression(df, iv_name, dv_name, ref_category=None):
     """
     Performs multinomial logistic regression and prints the results,
     including odds ratios and their confidence intervals.
@@ -429,42 +430,56 @@ def run_multinomial_regression(df, iv_name, dv_name):
         df (pd.DataFrame): The input DataFrame containing the data.
         iv_name (str): The name of the continuous independent variable column.
         dv_name (str): The name of the categorical dependent variable column.
+        ref_category (str, optional): The category to use as the reference
+                                      (base) level for the dependent variable.
+                                      If None, the alphabetically first category
+                                      will be used by default.
 
     Returns:
         statsmodels.discrete.discrete_model.MNLogitResults: The fitted model results object.
     """
 
-    # Check if the dependent variable exists in the DataFrame
-    if dv_name not in df.columns:
-        raise ValueError(f"Dependent variable '{dv_name}' not found in the DataFrame.")
+    # Check for required columns
+    if dv_name not in df.columns or iv_name not in df.columns:
+        raise ValueError("Dependent or independent variable not found in the DataFrame.")
 
-    # Check if the independent variable exists in the DataFrame
-    if iv_name not in df.columns:
-        raise ValueError(
-            f"Independent variable '{iv_name}' not found in the DataFrame."
-        )
+    # Create a copy to avoid modifying the original DataFrame
+    df_copy = df.copy()
 
-    # Check if the dependent variable is categorical
-    if not pd.api.types.is_categorical_dtype(
-        df[dv_name]
-    ) and not pd.api.types.is_object_dtype(df[dv_name]):
-        print(
-            f"Warning: Dependent variable '{dv_name}' is not of a categorical type. Attempting to convert."
-        )
-        df[dv_name] = df[dv_name].astype("category")
+    # Get the unique categories and handle the reference category
+    categories = sorted(df_copy[dv_name].unique())
+
+    if ref_category is None:
+        # If no reference is specified, use the alphabetically first category as default
+        ref_category = categories[0]
+        print(f"Using '{ref_category}' as the reference category.")
+    else:
+        # Check if the specified reference category exists
+        if ref_category not in categories:
+            raise ValueError(f"Reference category '{ref_category}' not found in '{dv_name}'.")
+
+    # The core of the solution: Manually map categories to numerical codes
+    # with the reference category mapped to 0.
+    category_mapping = {cat: i for i, cat in enumerate(categories)}
+    
+    # Swap the reference category to be code 0
+    ref_code = category_mapping[ref_category]
+    for key, value in category_mapping.items():
+        if value == 0:
+            category_mapping[key] = ref_code
+        elif value == ref_code:
+            category_mapping[key] = 0
+
+    # Apply the mapping to the dependent variable column
+    df_copy['y_encoded'] = df_copy[dv_name].map(category_mapping)
 
     # Define the independent (X) and dependent (y) variables
-    X = df[iv_name]
-    y = df[dv_name]
+    # The dependent variable is now the manually encoded numerical column
+    X = sm.add_constant(df_copy[iv_name])
+    y = df_copy['y_encoded']
 
-    # Encode the categorical dependent variable into numerical format
-    y_encoded = y.astype("category").cat.codes
-
-    # Add a constant to the independent variable for the intercept
-    X = sm.add_constant(X)
-
-    # Fit the Multinomial Logistic Regression model
-    model = sm.MNLogit(y_encoded, X)
+    # Fit the Multinomial Logistic Regression model using the simple API (not the formula API)
+    model = sm.MNLogit(y, X)
     mnlogit_fit = model.fit(method="newton", maxiter=100)
 
     return mnlogit_fit
