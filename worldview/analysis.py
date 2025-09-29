@@ -537,3 +537,53 @@ def run_all_pairwise_logistic_regressions(df, iv_name, dv_name):
     temp_df['Holm-Bonferroni P-value'] = adjusted_pvalues
     
     return temp_df
+
+
+def orchestrate_mlg_regression(df, iv, dv, ref):
+    # Step 1: Run the main multinomial regression
+    mnlogit_fit, category_mapping = run_multinomial_regression(
+        df=df,
+        iv_name=iv,
+        dv_name=dv,
+        ref_category=ref
+    )
+
+    # Step 2: Run all pairwise binary regressions
+    pairwise_results = run_all_pairwise_logistic_regressions(
+        df=df,
+        iv_name=iv,
+        dv_name=dv
+    )
+
+    # Step 3: Print the results in a clear, APA-style format
+    print(f"--- Multinomial Regression Summary for {iv} predicting {dv} ---")
+    print("----------------------------------------------------------------------")
+    print(f"Overall Model Test: χ²({mnlogit_fit.df_model}) = {mnlogit_fit.llr:.2f}, p = {mnlogit_fit.llr_pvalue:.4f}")
+    print(f"Pseudo R-squared: {mnlogit_fit.prsquared:.3f}")
+    print("----------------------------------------------------------------------")
+    print("Category Mapping:")
+    print(f"  Reference Category: {category_mapping[0]}")
+    for code, name in category_mapping.items():
+        if code != 0:
+            print(f"  y={code}: {name}")
+    print("----------------------------------------------------------------------")
+    print(mnlogit_fit.summary())
+    
+    print("\n--- Pairwise Logistic Regression Comparisons (Holm-Bonferroni Corrected) ---")
+    print("----------------------------------------------------------------------")
+    
+    # Select and rename columns for clarity, then round them
+    final_pairwise_df = pairwise_results[[
+        'Comparison', 'Coefficient', 'Std. Error', 'Z-score', 
+        'Odds Ratio', 'OR 95% CI Lower', 'OR 95% CI Upper', 
+        'Holm-Bonferroni P-value'
+    ]].round(4)
+    
+    # Format the p-value column to display <.0001 where appropriate
+    final_pairwise_df['Holm-Bonferroni P-value'] = final_pairwise_df['Holm-Bonferroni P-value'].apply(
+        lambda x: f"{x:.4f}" if x > 0 else "<.0001"
+    )
+    
+    # Print the final, formatted table
+    print(final_pairwise_df.to_string())
+    print("----------------------------------------------------------------------")
