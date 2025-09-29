@@ -1,11 +1,10 @@
-import warnings
 import pandas as pd
 import pingouin as pg
 from statsmodels.formula.api import ols
 import statsmodels.api as sm
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.stats.weightstats import ttest_ind
-import statsmodels.formula.api as smf
+import itertools
 import numpy as np
 from scipy.stats import chi2_contingency
 import scipy.stats as stats
@@ -423,8 +422,8 @@ def run_chi2_analysis(
 
 def run_multinomial_regression(df, iv_name, dv_name, ref_category=None):
     """
-    Performs multinomial logistic regression and prints the results,
-    including odds ratios and their confidence intervals.
+    Performs multinomial logistic regression and returns the fitted model results
+    and a mapping of numerical codes to category names.
 
     Args:
         df (pd.DataFrame): The input DataFrame containing the data.
@@ -436,7 +435,9 @@ def run_multinomial_regression(df, iv_name, dv_name, ref_category=None):
                                       will be used by default.
 
     Returns:
-        statsmodels.discrete.discrete_model.MNLogitResults: The fitted model results object.
+        tuple: A tuple containing:
+               - statsmodels.discrete.discrete_model.MNLogitResults: The fitted model results object.
+               - dict: A dictionary mapping the numerical codes to the original category names.
     """
 
     # Check for required columns
@@ -450,36 +451,89 @@ def run_multinomial_regression(df, iv_name, dv_name, ref_category=None):
     categories = sorted(df_copy[dv_name].unique())
 
     if ref_category is None:
-        # If no reference is specified, use the alphabetically first category as default
         ref_category = categories[0]
-        print(f"Using '{ref_category}' as the reference category.")
-    else:
-        # Check if the specified reference category exists
-        if ref_category not in categories:
-            raise ValueError(f"Reference category '{ref_category}' not found in '{dv_name}'.")
+    elif ref_category not in categories:
+        raise ValueError(f"Reference category '{ref_category}' not found in '{dv_name}'.")
 
-    # The core of the solution: Manually map categories to numerical codes
-    # with the reference category mapped to 0.
-    category_mapping = {cat: i for i, cat in enumerate(categories)}
-    
-    # Swap the reference category to be code 0
-    ref_code = category_mapping[ref_category]
-    for key, value in category_mapping.items():
-        if value == 0:
-            category_mapping[key] = ref_code
-        elif value == ref_code:
-            category_mapping[key] = 0
+    # Use pandas Categorical type to handle ordering and encoding
+    ordered_categories = [ref_category] + [c for c in categories if c != ref_category]
+    df_copy[dv_name] = pd.Categorical(df_copy[dv_name], categories=ordered_categories)
 
-    # Apply the mapping to the dependent variable column
-    df_copy['y_encoded'] = df_copy[dv_name].map(category_mapping)
-
-    # Define the independent (X) and dependent (y) variables
-    # The dependent variable is now the manually encoded numerical column
+    # Define the dependent (y) and independent (X) variables
+    y = df_copy[dv_name].cat.codes
     X = sm.add_constant(df_copy[iv_name])
-    y = df_copy['y_encoded']
 
-    # Fit the Multinomial Logistic Regression model using the simple API (not the formula API)
+    # Fit the Multinomial Logistic Regression model
     model = sm.MNLogit(y, X)
     mnlogit_fit = model.fit(method="newton", maxiter=100)
+    
+    # Create the mapping key to return
+    category_mapping = {code: name for code, name in enumerate(df_copy[dv_name].cat.categories)}
+    
+    return mnlogit_fit, category_mapping
 
-    return mnlogit_fit
+def run_all_pairwise_logistic_regressions(df, iv_name, dv_name):
+    """
+    Performs all pairwise binary logistic regressions for a categorical dependent
+    variable, applies a Holm-Bonferroni correction, and returns a summary DataFrame.
+
+    Args:
+        df (pd.DataFrame): The input DataFrame containing the data.
+        iv_name (str): The name of the continuous independent variable column.
+        dv_name (str): The name of the categorical dependent variable column.
+
+    Returns:
+        pd.DataFrame: A DataFrame with the results of all pairwise comparisons,
+                      including coefficients, odds ratios, confidence intervals,
+                      and adjusted p-values.
+    """
+
+    # Check for required columns
+    if dv_name not in df.columns or iv_name not in df.columns:
+        raise ValueError("Dependent or independent variable not found in the DataFrame.")
+
+    # Get all unique categories and generate all unique pairs
+    categories = sorted(df[dv_name].unique())
+    if len(categories) < 2:
+        raise ValueError("Dependent variable must have at least two categories for comparison.")
+    
+    pairs = list(itertools.combinations(categories, 2))
+    
+    # Store temporary results to apply corrections later
+    temp_results = []
+
+    # Step 1: Run all binary regressions to get original p-values
+    for ref_category, comp_category in pairs:
+        df_pair = df[df[dv_name].isin([ref_category, comp_category])].copy()
+        
+        # Manually encode the dependent variable for the binary regression
+        df_pair['y_encoded'] = df_pair[dv_name].apply(lambda x: 0 if x == ref_category else 1)
+        
+        y = df_pair['y_encoded']
+        X = sm.add_constant(df_pair[iv_name])
+        
+        model = sm.Logit(y, X)
+        log_reg_fit = model.fit(disp=False)
+
+        temp_results.append({
+            'Comparison': f"{comp_category} vs. {ref_category}",
+            'Coefficient': log_reg_fit.params[iv_name],
+            'Std. Error': log_reg_fit.bse[iv_name],
+            'Z-score': log_reg_fit.tvalues[iv_name],
+            'Original P-value': log_reg_fit.pvalues[iv_name],
+            'Odds Ratio': np.exp(log_reg_fit.params[iv_name]),
+            'OR 95% CI Lower': np.exp(log_reg_fit.conf_int().loc[iv_name, 0]),
+            'OR 95% CI Upper': np.exp(log_reg_fit.conf_int().loc[iv_name, 1]),
+            'Coef. 95% CI Lower': log_reg_fit.conf_int().loc[iv_name, 0],
+            'Coef. 95% CI Upper': log_reg_fit.conf_int().loc[iv_name, 1],
+        })
+    
+    temp_df = pd.DataFrame(temp_results)
+
+    # Step 2: Apply the Holm-Bonferroni correction
+    original_pvalues = temp_df['Original P-value'].values
+    reject, adjusted_pvalues, _, _ = multipletests(original_pvalues, alpha=0.05, method='holm')
+    
+    temp_df['Holm-Bonferroni P-value'] = adjusted_pvalues
+    
+    return temp_df
