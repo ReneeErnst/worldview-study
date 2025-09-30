@@ -284,9 +284,10 @@ def isi_subscale_scores(df: pd.DataFrame) -> pd.DataFrame:
     Raises:
         ValueError: If any subscale does not have exactly 9 items.
     """
-    isi_d_cols = [col for col in df.columns if col.startswith("isi_d")]
-    isi_i_cols = [col for col in df.columns if col.startswith("isi_i")]
-    isi_n_cols = [col for col in df.columns if col.startswith("isi_n")]
+    df_out = df.copy()
+    isi_d_cols = [col for col in df_out.columns if col.startswith("isi_d")]
+    isi_i_cols = [col for col in df_out.columns if col.startswith("isi_i")]
+    isi_n_cols = [col for col in df_out.columns if col.startswith("isi_n")]
 
     if len(isi_d_cols) != 9:
         raise ValueError(
@@ -299,11 +300,37 @@ def isi_subscale_scores(df: pd.DataFrame) -> pd.DataFrame:
     if len(isi_n_cols) != 9:
         raise ValueError(f"Expected 9 items for isi_normative, found {len(isi_n_cols)}")
 
-    df["isi_diffuse_avoidant_total"] = df[isi_d_cols].sum(axis=1)
-    df["isi_informational_total"] = df[isi_i_cols].sum(axis=1)
-    df["isi_normative_total"] = df[isi_n_cols].sum(axis=1)
+    df_out["isi_diffuse_avoidant_total"] = df_out[isi_d_cols].sum(axis=1) / 9
+    df_out["isi_informational_total"] = df_out[isi_i_cols].sum(axis=1) / 9
+    df_out["isi_normative_total"] = df_out[isi_n_cols].sum(axis=1) / 9
+    
+    # Determine ISI identity style
+    isi_cols = [
+        "isi_diffuse_avoidant_total",
+        "isi_informational_total",
+        "isi_normative_total",
+    ]
 
-    return df
+    # Identify ties for the max value in each row
+    max_values = df_out[isi_cols].max(axis=1)
+    is_max = df_out[isi_cols].eq(max_values, axis=0)
+    max_counts = is_max.sum(axis=1)
+
+    tie_count = (max_counts > 1).sum()
+    print(f"Number of rows with a tie for the maximum isi score: {tie_count}")
+
+    # Assign the dominant ISI identity style
+    isi_label_map = {
+        "isi_diffuse_avoidant_total": "isi_diffuse_avoidant",
+        "isi_informational_total": "isi_informational",
+        "isi_normative_total": "isi_normative",
+    }
+    df_out["dominant_isi"] = (
+        df_out[isi_cols].idxmax(axis=1).map(isi_label_map)
+    )
+    df_out.loc[max_counts > 1, "dominant_isi"] = "multiple_ties"
+
+    return df_out
 
 
 def worldview_transformations(df: pd.DataFrame) -> pd.DataFrame:
@@ -376,7 +403,7 @@ def assign_dominant_worldview(df: pd.DataFrame) -> pd.DataFrame:
         df: DataFrame containing the four '_wvs_total' columns.
 
     Returns:
-        The DataFrame with the final 'dominant_worldview' column.
+        The DataFrame with the final 'dominant_worldview' column and a list of max worldviews.
     """
     df_out = df.copy()
     worldview_cols = [
@@ -399,6 +426,12 @@ def assign_dominant_worldview(df: pd.DataFrame) -> pd.DataFrame:
         df_out[worldview_cols].idxmax(axis=1).str.replace("_wvs_total", "", regex=False)
     )
     df_out.loc[max_counts > 1, "dominant_worldview"] = "multiple_ties"
+
+    # Add a column with a list of worldviews where the score is equal to the max
+    worldview_names = [col.replace("_wvs_total", "") for col in worldview_cols]
+    df_out["max_worldviews"] = is_max.apply(
+        lambda row: [wv for wv, flag in zip(worldview_names, row) if flag], axis=1
+    )
 
     return df_out
 
