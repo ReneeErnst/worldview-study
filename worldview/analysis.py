@@ -475,7 +475,7 @@ def run_multinomial_regression(df, iv_name, dv_name, ref_category=None):
 def run_all_pairwise_logistic_regressions(df, iv_name, dv_name):
     """
     Performs all pairwise binary logistic regressions for a categorical dependent
-    variable, applies a Holm-Bonferroni correction, and returns a summary DataFrame.
+    variable, ensuring a positive coefficient is reported where possible.
 
     Args:
         df (pd.DataFrame): The input DataFrame containing the data.
@@ -503,36 +503,53 @@ def run_all_pairwise_logistic_regressions(df, iv_name, dv_name):
     temp_results = []
 
     # Step 1: Run all binary regressions to get original p-values
-    for ref_category, comp_category in pairs:
-        df_pair = df[df[dv_name].isin([ref_category, comp_category])].copy()
+    for category1, category2 in pairs:
+        # Create a temporary DataFrame with only the two categories
+        df_pair = df[df[dv_name].isin([category1, category2])].copy()
         
-        # Manually encode the dependent variable for the binary regression
-        df_pair['y_encoded'] = df_pair[dv_name].apply(lambda x: 0 if x == ref_category else 1)
+        # Direction 1: category1 vs. category2 (as reference)
+        df_pair['y_encoded_1'] = df_pair[dv_name].apply(lambda x: 0 if x == category2 else 1)
+        model_1 = sm.Logit(df_pair['y_encoded_1'], sm.add_constant(df_pair[iv_name]))
+        fit_1 = model_1.fit(disp=False)
         
-        y = df_pair['y_encoded']
-        X = sm.add_constant(df_pair[iv_name])
-        
-        model = sm.Logit(y, X)
-        log_reg_fit = model.fit(disp=False)
+        # Direction 2: category2 vs. category1 (as reference)
+        df_pair['y_encoded_2'] = df_pair[dv_name].apply(lambda x: 0 if x == category1 else 1)
+        model_2 = sm.Logit(df_pair['y_encoded_2'], sm.add_constant(df_pair[iv_name]))
+        fit_2 = model_2.fit(disp=False)
 
+        # Choose the fit with the positive coefficient for the independent variable
+        if fit_1.params[iv_name] > 0:
+            best_fit = fit_1
+            comp_cat = category1
+            ref_cat = category2
+        else:
+            best_fit = fit_2
+            comp_cat = category2
+            ref_cat = category1
+
+        # Extract stats from the chosen fitted model
+        params = best_fit.params
+        pvalues = best_fit.pvalues
+        conf_int = best_fit.conf_int()
+        
         temp_results.append({
-            'Comparison': f"{comp_category} vs. {ref_category}",
-            'Coefficient': log_reg_fit.params[iv_name],
-            'Std. Error': log_reg_fit.bse[iv_name],
-            'Z-score': log_reg_fit.tvalues[iv_name],
-            'Original P-value': log_reg_fit.pvalues[iv_name],
-            'Odds Ratio': np.exp(log_reg_fit.params[iv_name]),
-            'OR 95% CI Lower': np.exp(log_reg_fit.conf_int().loc[iv_name, 0]),
-            'OR 95% CI Upper': np.exp(log_reg_fit.conf_int().loc[iv_name, 1]),
-            'Coef. 95% CI Lower': log_reg_fit.conf_int().loc[iv_name, 0],
-            'Coef. 95% CI Upper': log_reg_fit.conf_int().loc[iv_name, 1],
+            'Comparison': f"{comp_cat} vs. {ref_cat}",
+            'Coefficient': params[iv_name],
+            'Std. Error': best_fit.bse[iv_name],
+            'Z-score': best_fit.tvalues[iv_name],
+            'Original P-value': pvalues[iv_name],
+            'Odds Ratio': np.exp(params[iv_name]),
+            'OR 95% CI Lower': np.exp(conf_int.loc[iv_name, 0]),
+            'OR 95% CI Upper': np.exp(conf_int.loc[iv_name, 1]),
+            'Coef. 95% CI Lower': conf_int.loc[iv_name, 0],
+            'Coef. 95% CI Upper': conf_int.loc[iv_name, 1],
         })
     
     temp_df = pd.DataFrame(temp_results)
 
     # Step 2: Apply the Holm-Bonferroni correction
     original_pvalues = temp_df['Original P-value'].values
-    reject, adjusted_pvalues, _, _ = multipletests(original_pvalues, alpha=0.05, method='holm')
+    _, adjusted_pvalues, _, _ = multipletests(original_pvalues, alpha=0.05, method='holm')
     
     temp_df['Holm-Bonferroni P-value'] = adjusted_pvalues
     
