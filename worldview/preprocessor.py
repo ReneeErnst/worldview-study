@@ -15,30 +15,37 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         pd.DataFrame: DataFrame with mapped demographic values.
     """
     df_out = df.copy()
-    
+
     df_out["age_group_ordinal"] = df_out["age_group"]
-    
+
     age = {1: "25-34", 2: "35-44", 3: "45-54", 4: "55-64", 5: "65-74", 6: "75+"}
     df_out["age_group"] = df_out["age_group"].map(age)
-    
+
     # Combine the last two groups to 65+
     df_out["age_group_65_ordinal"] = df_out["age_group_ordinal"].replace(6, 5)
     age_65 = {1: "25-34", 2: "35-44", 3: "45-54", 4: "55-64+", 5: "65+"}
     df_out["age_group_65"] = df_out["age_group_65_ordinal"].map(age_65)
-    
+
     # Combine 55-64 with 65+, to create 55+
     df_out["age_group_55_ordinal"] = df_out["age_group_65_ordinal"].replace(5, 4)
     age_55 = {1: "25-34", 2: "35-44", 3: "45-54", 4: "55+"}
     df_out["age_group_55"] = df_out["age_group_55_ordinal"].map(age_55)
-    
+
     # age group - 2 levels (under and over 45)
-    age_reduced = {1: "under 45", 2: "under 45", 3: "45 and older", 4: "45 and older", 5: "45 and older", 6: "45 and older"}
+    age_reduced = {
+        1: "under 45",
+        2: "under 45",
+        3: "45 and older",
+        4: "45 and older",
+        5: "45 and older",
+        6: "45 and older",
+    }
     df_out["age_group_2_levels"] = df_out["age_group_ordinal"].map(age_reduced)
 
     gender = {1: "female", 2: "male", 3: "nonbinary"}
     df_out["gender"] = df_out["gender"].map(gender)
     df_out["gender_2"] = df_out["gender"].replace("nonbinary", np.nan)
-    
+
     # No additional/cleaning groups for this, per request
     ethnicity = {
         1: "American Indian or Alaska Native",
@@ -50,12 +57,12 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         7: "White",
     }
     df_out["ethnicity"] = df_out["ethnicity"].map(ethnicity)
-    
+
     # Education - treat 0s (Other - please specify) and 8s (Prefer not to Answer)
     # as NaN - we will fill them in as able from the text item
     df_out["education"] = df_out["education"].replace(0, np.nan)
     df_out["education"] = df_out["education"].replace(8, np.nan)
-    
+
     # Use text to clean up the education value before other updates
     # Check the other education field for keywords and update the main education field as needed
     df_out.loc[
@@ -70,10 +77,10 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         df_out["education_other"].str.contains("MD", na=False),
         "education",
     ] = 7
-    
+
     # Create ordinal education var without any collapsing of groups
     df_out["education_ordinal"] = df_out["education"]
-    
+
     # Education to text values
     education_map = {
         1: "Highschool gradate or proficiency",
@@ -81,37 +88,68 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
         3: "1-2 years college/associate’s degree",
         4: "Graduated with Bachelors",
         5: "Some graduate school",
-        6: "Graduated with master’s degree", 
-        7: "Graduated with PhD"
+        6: "Graduated with master’s degree",
+        7: "Graduated with PhD",
     }
     df_out["education"] = df_out["education"].map(education_map)
-    
+
     # Condense the education vars into 5 levels
     education_5_levels_ordinal_map = {
         1: 1,
-        2: 2, # "1-2 years college/associate’s degree/trade school/certifications",
-        3: 2, # "1-2 years college/associate’s degree/trade school/certifications",
-        4: 3, # "Graduated with Bachelors",
-        5: 3, # "Graduated with Bachelors",
+        2: 2,  # "1-2 years college/associate’s degree/trade school/certifications",
+        3: 2,  # "1-2 years college/associate’s degree/trade school/certifications",
+        4: 3,  # "Graduated with Bachelors",
+        5: 3,  # "Graduated with Bachelors",
         6: 4,
-        7: 5,  
+        7: 5,
     }
-    df_out["education_ordinal_5_levels"] = df_out["education_ordinal"].map(education_5_levels_ordinal_map)
-    
+    df_out["education_ordinal_5_levels"] = df_out["education_ordinal"].map(
+        education_5_levels_ordinal_map
+    )
+
     education_5_level = {
         1: "Highschool gradate or proficiency",
         2: "1-2 years college/associate’s degree/trade school/certifications",
         3: "Graduated with Bachelors",
         4: "Graduated with master’s degree",
-        5: "Graduated with PhD", 
+        5: "Graduated with PhD",
     }
-    df_out["education_5_levels"] = df_out["education_ordinal_5_levels"].map(education_5_level)
+    df_out["education_5_levels"] = df_out["education_ordinal_5_levels"].map(
+        education_5_level
+    )
+
+    # combine the graduate degree - condense the education vars into 4 levels
+    education_4_levels_ordinal_map = {
+        1: 1,
+        2: 2,
+        3: 3,
+        4: 4,
+        5: 4,
+    }
+    df_out["education_ordinal_4_levels"] = df_out["education_ordinal_5_levels"].map(
+        education_4_levels_ordinal_map
+    )
+
+    education_4_level = {
+        1: "Highschool gradate or proficiency",
+        2: "1-2 years college/associate’s degree/trade school/certifications",
+        3: "Graduated with Bachelors",
+        4: "Graduate Degree",
+        5: "Graduate Degree",
+    }
+    df_out["education_4_levels"] = df_out["education_ordinal_4_levels"].map(
+        education_4_level
+    )
 
     # Religion - treat 0s (Other - please specify) and 8s (Prefer not to Answer)
     # as NaN - we will fill them in as able from the text item
-    df_out["religious_spiritual_orientation"] = df_out["religious_spiritual_orientation"].replace(0, np.nan)
-    df_out["religious_spiritual_orientation"] = df_out["religious_spiritual_orientation"].replace(8, np.nan)
-    
+    df_out["religious_spiritual_orientation"] = df_out[
+        "religious_spiritual_orientation"
+    ].replace(0, np.nan)
+    df_out["religious_spiritual_orientation"] = df_out[
+        "religious_spiritual_orientation"
+    ].replace(8, np.nan)
+
     # Clean up religion based on the other field
     # If they entered "Muslim" in the other field, put them in the new 8 group
     df_out.loc[
@@ -121,15 +159,21 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
     ] = 8
     # If they entered variations on catholic in the other field, change their main religion to Christian
     df_out.loc[
-        df_out["religious_spiritual_orientation_other"].str.strip().str.lower().str.contains("catholic", na=False),
+        df_out["religious_spiritual_orientation_other"]
+        .str.strip()
+        .str.lower()
+        .str.contains("catholic", na=False),
         "religious_spiritual_orientation",
     ] = 4
     # If they entered variations on none in the other field, change their main religion to Atheist
     df_out.loc[
-        df_out["religious_spiritual_orientation_other"].str.strip().str.lower().str.contains("none|nothing|not religious|no belief", na=False),
+        df_out["religious_spiritual_orientation_other"]
+        .str.strip()
+        .str.lower()
+        .str.contains("none|nothing|not religious|no belief", na=False),
         "religious_spiritual_orientation",
     ] = 3
-    
+
     # Convert the categorical religion to corresponding text value
     religion = {
         1: "Spiritually eclectic",
@@ -144,7 +188,7 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
     df_out["religious_spiritual_orientation"] = df_out[
         "religious_spiritual_orientation"
     ].map(religion)
-    
+
     # Reduce the religion categories, combining Judaism, Buddhist, Hindu, and Muslim into "Other"
     df_out["religious_spiritual_orientation_reduced"] = df_out[
         "religious_spiritual_orientation"
@@ -156,12 +200,12 @@ def demographics_mapping(df: pd.DataFrame) -> pd.DataFrame:
             "Muslim": "Other",
         }
     )
-    
+
     # rename column "transexual" to "transsexual" and clean values
     df_out = df_out.rename(columns={"transexual": "transsexual"})
     # Clean up values - "no", "No ", " NO" -> "no"
     df_out["transsexual"] = df_out["transsexual"].str.strip().str.lower()
-    
+
     df_out["feel_experience_changed"] = df_out["feel_experience_changed"].map(
         {1: "yes", 2: "no"}
     )
@@ -240,9 +284,10 @@ def isi_subscale_scores(df: pd.DataFrame) -> pd.DataFrame:
     Raises:
         ValueError: If any subscale does not have exactly 9 items.
     """
-    isi_d_cols = [col for col in df.columns if col.startswith("isi_d")]
-    isi_i_cols = [col for col in df.columns if col.startswith("isi_i")]
-    isi_n_cols = [col for col in df.columns if col.startswith("isi_n")]
+    df_out = df.copy()
+    isi_d_cols = [col for col in df_out.columns if col.startswith("isi_d")]
+    isi_i_cols = [col for col in df_out.columns if col.startswith("isi_i")]
+    isi_n_cols = [col for col in df_out.columns if col.startswith("isi_n")]
 
     if len(isi_d_cols) != 9:
         raise ValueError(
@@ -255,11 +300,37 @@ def isi_subscale_scores(df: pd.DataFrame) -> pd.DataFrame:
     if len(isi_n_cols) != 9:
         raise ValueError(f"Expected 9 items for isi_normative, found {len(isi_n_cols)}")
 
-    df["isi_diffuse_avoidant_total"] = df[isi_d_cols].sum(axis=1)
-    df["isi_informational_total"] = df[isi_i_cols].sum(axis=1)
-    df["isi_normative_total"] = df[isi_n_cols].sum(axis=1)
+    df_out["isi_diffuse_avoidant_total"] = df_out[isi_d_cols].sum(axis=1) / 9
+    df_out["isi_informational_total"] = df_out[isi_i_cols].sum(axis=1) / 9
+    df_out["isi_normative_total"] = df_out[isi_n_cols].sum(axis=1) / 9
+    
+    # Determine ISI identity style
+    isi_cols = [
+        "isi_diffuse_avoidant_total",
+        "isi_informational_total",
+        "isi_normative_total",
+    ]
 
-    return df
+    # Identify ties for the max value in each row
+    max_values = df_out[isi_cols].max(axis=1)
+    is_max = df_out[isi_cols].eq(max_values, axis=0)
+    max_counts = is_max.sum(axis=1)
+
+    tie_count = (max_counts > 1).sum()
+    print(f"Number of rows with a tie for the maximum isi score: {tie_count}")
+
+    # Assign the dominant ISI identity style
+    isi_label_map = {
+        "isi_diffuse_avoidant_total": "isi_diffuse_avoidant",
+        "isi_informational_total": "isi_informational",
+        "isi_normative_total": "isi_normative",
+    }
+    df_out["dominant_isi"] = (
+        df_out[isi_cols].idxmax(axis=1).map(isi_label_map)
+    )
+    df_out.loc[max_counts > 1, "dominant_isi"] = "multiple_ties"
+
+    return df_out
 
 
 def worldview_transformations(df: pd.DataFrame) -> pd.DataFrame:
@@ -332,7 +403,7 @@ def assign_dominant_worldview(df: pd.DataFrame) -> pd.DataFrame:
         df: DataFrame containing the four '_wvs_total' columns.
 
     Returns:
-        The DataFrame with the final 'dominant_worldview' column.
+        The DataFrame with the final 'dominant_worldview' column and a list of max worldviews.
     """
     df_out = df.copy()
     worldview_cols = [
@@ -355,6 +426,12 @@ def assign_dominant_worldview(df: pd.DataFrame) -> pd.DataFrame:
         df_out[worldview_cols].idxmax(axis=1).str.replace("_wvs_total", "", regex=False)
     )
     df_out.loc[max_counts > 1, "dominant_worldview"] = "multiple_ties"
+
+    # Add a column with a list of worldviews where the score is equal to the max
+    worldview_names = [col.replace("_wvs_total", "") for col in worldview_cols]
+    df_out["max_worldviews"] = is_max.apply(
+        lambda row: [wv for wv, flag in zip(worldview_names, row) if flag], axis=1
+    )
 
     return df_out
 
@@ -404,7 +481,7 @@ def create_prepped_data() -> pd.DataFrame:
         "age_group_ordinal",
         "age_group_65",
         "age_group_65_ordinal",
-        "age_group_55", 
+        "age_group_55",
         "age_group_55_ordinal",
         "age_group_2_levels",
         "gender",

@@ -1,10 +1,10 @@
-import warnings
 import pandas as pd
 import pingouin as pg
 from statsmodels.formula.api import ols
 import statsmodels.api as sm
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.stats.weightstats import ttest_ind
+import itertools
 import numpy as np
 from scipy.stats import chi2_contingency
 import scipy.stats as stats
@@ -269,7 +269,7 @@ def get_independent_ttest(df: pd.DataFrame, x: str, y: str) -> pd.Series:
 
 
 def run_chi2_analysis(
-    df: pd.DataFrame, x: str, y: str, alpha: float = 0.05, p_adjust_method: str = "bonferroni"
+    df: pd.DataFrame, x: str, y: str, alpha: float = 0.05, p_adjust_method: str = "holm"
 ) -> dict:
     """
     Performs a Chi-squared test of independence and, if significant,
@@ -285,23 +285,35 @@ def run_chi2_analysis(
         alpha (float): The significance level. Defaults to 0.05.
         p_adjust_method (str): The p-value adjustment method for post-hoc tests.
                                See statsmodels.stats.multitest.multipletests
-                               documentation for options. Defaults to "bonferroni".
+                               documentation for options. Defaults to "holm".
 
     Returns:
         dict: A dictionary containing the contingency table, main test results,
               expected frequencies, post-hoc results (if applicable), and an
               APA-formatted summary string.
     """
-    # Create Contingency Table ---
+    # Create Contingency Table (Observed Frequencies) ---
     contingency_table = pd.crosstab(df[x], df[y])
-    
+
+    # Calculate and Format Row Percentages
+    row_percentages = pd.crosstab(df[x], df[y], normalize="index") * 100
+
+    # Create a new DataFrame to combine counts and percentages
+    combined_table = contingency_table.copy()
+    for col in combined_table.columns:
+        combined_table[col] = (
+            combined_table[col].astype(str)
+            + " ("
+            + row_percentages[col].round(2).astype(str)
+            + "%)"
+        )
+
     # Perform the Main Chi-Squared Test ---
     chi2, p_value, dof, expected_freqs = chi2_contingency(contingency_table)
 
     # Calculate Sample Size and Effect Size (Cramer's V) ---
     sample_size = contingency_table.sum().sum()
     min_dim = min(contingency_table.shape) - 1
-    # Avoid division by zero if min_dim is 0 (e.g., a 1xN table)
     cramer_v = np.sqrt(chi2 / (sample_size * min_dim)) if min_dim > 0 else 0
 
     # Format the p-value for APA style ---
@@ -316,51 +328,79 @@ def run_chi2_analysis(
         f"p {p_apa}, Cramer's V = {cramer_v:.2f}"
     )
 
-    # # Conditionally Perform Post-Hoc Tests ---
-    # posthoc_results = None
+    # Conditionally Perform Post-Hoc Tests ---
+    posthoc_results = None
     if p_value < alpha:
         print(f"Overall test was significant (p = {p_value:.4f}).")
-        
-    #     # Manually perform pairwise chi-squared tests
-    #     groups = contingency_table.index.tolist()
-    #     all_pairs = list(combinations(groups, 2))
-    #     p_values_uncorrected = []
+        print(f"Conducting post-hoc tests with {p_adjust_method} correction.")
 
-    #     for group1, group2 in all_pairs:
-    #         pair_table = contingency_table.loc[[group1, group2]]
-            
-    #         # Remove columns where both groups have a count of 0 to prevent ValueError
-    #         pair_table = pair_table.loc[:, pair_table.sum(axis=0) > 0]
-            
-    #         # If table is too small after filtering, test is not meaningful
-    #         if pair_table.shape[1] < 2:
-    #             p_uncorr = 1.0
-    #         else:
-    #             # Run chi2 test on the 2xN table for the pair
-    #             _, p_uncorr, _, _ = chi2_contingency(pair_table, correction=False)
-            
-    #         p_values_uncorrected.append(p_uncorr)
+        groups = contingency_table.index.tolist()
+        categories = contingency_table.columns.tolist()
 
-    #     # Correct the p-values using statsmodels
-    #     reject, p_values_corrected, _, _ = multipletests(
-    #         p_values_uncorrected, alpha=alpha, method=p_adjust_method
-    #     )
+        all_pairs = list(combinations(groups, 2))
 
-    #     # Create a clean matrix for the results
-    #     posthoc_df = pd.DataFrame(np.nan, index=groups, columns=groups)
-    #     for (group1, group2), p_corr in zip(all_pairs, p_values_corrected):
-    #         posthoc_df.loc[group1, group2] = p_corr
-    #         posthoc_df.loc[group2, group1] = p_corr
-        
-    #     np.fill_diagonal(posthoc_df.values, 1.0)
-    #     posthoc_results = posthoc_df
+        # A list to store the results of each 2x2 test
+        posthoc_data = []
+
+        # Loop through all pairs of groups and all categories
+        for group1, group2 in all_pairs:
+            for category in categories:
+                # Build the 2x2 contingency table for the comparison
+                table_data = np.array(
+                    [
+                        [
+                            contingency_table.loc[group1, category],
+                            contingency_table.loc[group1, :].sum()
+                            - contingency_table.loc[group1, category],
+                        ],
+                        [
+                            contingency_table.loc[group2, category],
+                            contingency_table.loc[group2, :].sum()
+                            - contingency_table.loc[group2, category],
+                        ],
+                    ]
+                )
+
+                # Check for zero rows or columns to prevent ValueError
+                if np.any(table_data.sum(axis=0) == 0) or np.any(
+                    table_data.sum(axis=1) == 0
+                ):
+                    p_uncorr = 1.0  # No difference if one category has zero counts
+                else:
+                    # Perform the Chi-squared test on the 2x2 table
+                    _, p_uncorr, _, _ = chi2_contingency(table_data, correction=False)
+
+                # Store the uncorrected p-value and relevant info
+                posthoc_data.append(
+                    {
+                        "group1": group1,
+                        "group2": group2,
+                        "category": category,
+                        "p_uncorrected": p_uncorr,
+                    }
+                )
+
+        # Apply p-value correction to the uncorrected p-values
+        p_values_uncorrected = [d["p_uncorrected"] for d in posthoc_data]
+        reject, p_values_corrected, _, _ = multipletests(
+            p_values_uncorrected, alpha=alpha, method=p_adjust_method
+        )
+
+        # Update the results with corrected p-values and significance flags
+        for i, (p_corr, sig) in enumerate(zip(p_values_corrected, reject)):
+            posthoc_data[i]["p_corrected"] = p_corr
+            posthoc_data[i]["significant"] = sig
+
+        posthoc_results = pd.DataFrame(posthoc_data)
 
     else:
-        print(f"Overall test was not significant (p = {p_value:.4f}).")
-        
-    # --- 7. Compile All Results into a Dictionary ---
+        print(
+            f"Overall test was not significant (p = {p_value:.4f}). No post-hoc tests were performed."
+        )
+
+    # Compile All Results into a Dictionary
     results = {
-        "contingency_table": contingency_table,
+        "contingency_table": combined_table,
         "main_test": {
             "chi2_statistic": chi2,
             "dof": dof,
@@ -371,10 +411,196 @@ def run_chi2_analysis(
         "expected_frequencies": pd.DataFrame(
             expected_freqs,
             index=contingency_table.index,
-            columns=contingency_table.columns
+            columns=contingency_table.columns,
         ),
-        # "posthoc_results": posthoc_results,
+        "posthoc_results": posthoc_results,
         "apa_summary": apa_summary,
     }
 
     return results
+
+
+def run_multinomial_regression(df, iv_name, dv_name, ref_category=None):
+    """
+    Performs multinomial logistic regression and returns the fitted model results
+    and a mapping of numerical codes to category names.
+
+    Args:
+        df (pd.DataFrame): The input DataFrame containing the data.
+        iv_name (str): The name of the continuous independent variable column.
+        dv_name (str): The name of the categorical dependent variable column.
+        ref_category (str, optional): The category to use as the reference
+                                      (base) level for the dependent variable.
+                                      If None, the alphabetically first category
+                                      will be used by default.
+
+    Returns:
+        tuple: A tuple containing:
+               - statsmodels.discrete.discrete_model.MNLogitResults: The fitted model results object.
+               - dict: A dictionary mapping the numerical codes to the original category names.
+    """
+
+    # Check for required columns
+    if dv_name not in df.columns or iv_name not in df.columns:
+        raise ValueError("Dependent or independent variable not found in the DataFrame.")
+
+    # Create a copy to avoid modifying the original DataFrame
+    df_copy = df.copy()
+
+    # Get the unique categories and handle the reference category
+    categories = sorted(df_copy[dv_name].unique())
+
+    if ref_category is None:
+        ref_category = categories[0]
+    elif ref_category not in categories:
+        raise ValueError(f"Reference category '{ref_category}' not found in '{dv_name}'.")
+
+    # Use pandas Categorical type to handle ordering and encoding
+    ordered_categories = [ref_category] + [c for c in categories if c != ref_category]
+    df_copy[dv_name] = pd.Categorical(df_copy[dv_name], categories=ordered_categories)
+
+    # Define the dependent (y) and independent (X) variables
+    y = df_copy[dv_name].cat.codes
+    X = sm.add_constant(df_copy[iv_name])
+
+    # Fit the Multinomial Logistic Regression model
+    model = sm.MNLogit(y, X)
+    mnlogit_fit = model.fit(method="newton", maxiter=100)
+    
+    # Create the mapping key to return
+    category_mapping = {code: name for code, name in enumerate(df_copy[dv_name].cat.categories)}
+    
+    return mnlogit_fit, category_mapping
+
+def run_all_pairwise_logistic_regressions(df, iv_name, dv_name):
+    """
+    Performs all pairwise binary logistic regressions for a categorical dependent
+    variable, ensuring a positive coefficient is reported where possible.
+
+    Args:
+        df (pd.DataFrame): The input DataFrame containing the data.
+        iv_name (str): The name of the continuous independent variable column.
+        dv_name (str): The name of the categorical dependent variable column.
+
+    Returns:
+        pd.DataFrame: A DataFrame with the results of all pairwise comparisons,
+                      including coefficients, odds ratios, confidence intervals,
+                      and adjusted p-values.
+    """
+
+    # Check for required columns
+    if dv_name not in df.columns or iv_name not in df.columns:
+        raise ValueError("Dependent or independent variable not found in the DataFrame.")
+
+    # Get all unique categories and generate all unique pairs
+    categories = sorted(df[dv_name].unique())
+    if len(categories) < 2:
+        raise ValueError("Dependent variable must have at least two categories for comparison.")
+    
+    pairs = list(itertools.combinations(categories, 2))
+    
+    # Store temporary results to apply corrections later
+    temp_results = []
+
+    # Step 1: Run all binary regressions to get original p-values
+    for category1, category2 in pairs:
+        # Create a temporary DataFrame with only the two categories
+        df_pair = df[df[dv_name].isin([category1, category2])].copy()
+        
+        # Direction 1: category1 vs. category2 (as reference)
+        df_pair['y_encoded_1'] = df_pair[dv_name].apply(lambda x: 0 if x == category2 else 1)
+        model_1 = sm.Logit(df_pair['y_encoded_1'], sm.add_constant(df_pair[iv_name]))
+        fit_1 = model_1.fit(disp=False)
+        
+        # Direction 2: category2 vs. category1 (as reference)
+        df_pair['y_encoded_2'] = df_pair[dv_name].apply(lambda x: 0 if x == category1 else 1)
+        model_2 = sm.Logit(df_pair['y_encoded_2'], sm.add_constant(df_pair[iv_name]))
+        fit_2 = model_2.fit(disp=False)
+
+        # Choose the fit with the positive coefficient for the independent variable
+        if fit_1.params[iv_name] > 0:
+            best_fit = fit_1
+            comp_cat = category1
+            ref_cat = category2
+        else:
+            best_fit = fit_2
+            comp_cat = category2
+            ref_cat = category1
+
+        # Extract stats from the chosen fitted model
+        params = best_fit.params
+        pvalues = best_fit.pvalues
+        conf_int = best_fit.conf_int()
+        
+        temp_results.append({
+            'Comparison': f"{comp_cat} vs. {ref_cat}",
+            'Coefficient': params[iv_name],
+            'Std. Error': best_fit.bse[iv_name],
+            'Z-score': best_fit.tvalues[iv_name],
+            'Original P-value': pvalues[iv_name],
+            'Odds Ratio': np.exp(params[iv_name]),
+            'OR 95% CI Lower': np.exp(conf_int.loc[iv_name, 0]),
+            'OR 95% CI Upper': np.exp(conf_int.loc[iv_name, 1]),
+            'Coef. 95% CI Lower': conf_int.loc[iv_name, 0],
+            'Coef. 95% CI Upper': conf_int.loc[iv_name, 1],
+        })
+    
+    temp_df = pd.DataFrame(temp_results)
+
+    # Step 2: Apply the Holm-Bonferroni correction
+    original_pvalues = temp_df['Original P-value'].values
+    _, adjusted_pvalues, _, _ = multipletests(original_pvalues, alpha=0.05, method='holm')
+    
+    temp_df['Holm-Bonferroni P-value'] = adjusted_pvalues
+    
+    return temp_df
+
+
+def orchestrate_mlg_regression(df, iv, dv, ref):
+    # Step 1: Run the main multinomial regression
+    mnlogit_fit, category_mapping = run_multinomial_regression(
+        df=df,
+        iv_name=iv,
+        dv_name=dv,
+        ref_category=ref
+    )
+
+    # Step 2: Run all pairwise binary regressions
+    pairwise_results = run_all_pairwise_logistic_regressions(
+        df=df,
+        iv_name=iv,
+        dv_name=dv
+    )
+
+    # Step 3: Print the results in a clear, APA-style format
+    print(f"--- Multinomial Regression Summary for {iv} predicting {dv} ---")
+    print("----------------------------------------------------------------------")
+    print(f"Overall Model Test: χ²({mnlogit_fit.df_model}) = {mnlogit_fit.llr:.2f}, p = {mnlogit_fit.llr_pvalue:.4f}")
+    print(f"Pseudo R-squared: {mnlogit_fit.prsquared:.3f}")
+    print("----------------------------------------------------------------------")
+    print("Category Mapping:")
+    print(f"  Reference Category: {category_mapping[0]}")
+    for code, name in category_mapping.items():
+        if code != 0:
+            print(f"  y={code}: {name}")
+    print("----------------------------------------------------------------------")
+    print(mnlogit_fit.summary())
+    
+    print("\n--- Pairwise Logistic Regression Comparisons (Holm-Bonferroni Corrected) ---")
+    print("----------------------------------------------------------------------")
+    
+    # Select and rename columns for clarity, then round them
+    final_pairwise_df = pairwise_results[[
+        'Comparison', 'Coefficient', 'Std. Error', 'Z-score', 
+        'Odds Ratio', 'OR 95% CI Lower', 'OR 95% CI Upper', 
+        'Holm-Bonferroni P-value'
+    ]].round(4)
+    
+    # Format the p-value column to display <.0001 where appropriate
+    final_pairwise_df['Holm-Bonferroni P-value'] = final_pairwise_df['Holm-Bonferroni P-value'].apply(
+        lambda x: f"{x:.4f}" if x > 0 else "<.0001"
+    )
+    
+    # Print the final, formatted table
+    print(final_pairwise_df.to_string())
+    print("----------------------------------------------------------------------")
